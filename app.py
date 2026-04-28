@@ -26,7 +26,8 @@ if page == "Principal Dashboard":
     try:
         # Fetch data globally for the dashboard
         projects_response = supabase.table("projects").select("*").execute()
-        team_response = supabase.table("team_members").select("id, full_name").execute()
+        # UPDATED: Included 'role' in the select statement
+        team_response = supabase.table("team_members").select("id, full_name, role").execute()
         tasks_response = supabase.table("tasks").select("*").execute()
         
         projects_data = projects_response.data
@@ -51,7 +52,7 @@ if page == "Principal Dashboard":
                 
             st.divider()
             
-            # --- UPDATED: Project Directory ---
+            # --- Project Directory ---
             with st.expander("📂 View Project Directory"):
                 df_projects = pd.DataFrame(projects_data)
                 
@@ -139,7 +140,8 @@ elif page == "Assign Task":
     
     try:
         projects_response = supabase.table("projects").select("project_code, project_name").execute()
-        team_response = supabase.table("team_members").select("id, full_name").execute()
+        # UPDATED: Included 'role'
+        team_response = supabase.table("team_members").select("id, full_name, role").execute()
         
         projects_data = projects_response.data
         team_data = team_response.data
@@ -192,8 +194,9 @@ elif page == "Team Board":
     
     try:
         tasks_response = supabase.table("tasks").select("*").execute()
-        team_response = supabase.table("team_members").select("id, full_name").execute()
-        projects_response = supabase.table("projects").select("project_code, project_name").execute()
+        # UPDATED: Fetch 'role' to enable permissions logic
+        team_response = supabase.table("team_members").select("id, full_name, role").execute()
+        projects_response = supabase.table("projects").select("*").execute() # Need all columns for filtering team_lead
         
         tasks_data = tasks_response.data
         team_data = team_response.data
@@ -205,11 +208,14 @@ elif page == "Team Board":
             # Create mappings
             name_to_id_map = {member['full_name']: member['id'] for member in team_data}
             id_to_name_map = {member['id']: member['full_name'] for member in team_data}
+            # NEW: Mapping to easily retrieve the role of the selected user
+            name_to_role_map = {member['full_name']: member.get('role', 'Team Member') for member in team_data}
             project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
             
             # --- Top Level Filter ---
             selected_member_name = st.selectbox("Select Your Name", options=list(name_to_id_map.keys()))
             selected_member_id = name_to_id_map[selected_member_name]
+            selected_member_role = name_to_role_map[selected_member_name] # Fetch role
             
             st.divider()
             
@@ -248,37 +254,55 @@ elif page == "Team Board":
             else:
                 st.info(f"No active tasks assigned to {selected_member_name}.")
                 
-            # --- NEW: Update Project Status Section ---
+            # --- Update Project Status Section ---
             st.divider()
             st.subheader("Update Project Status")
             
             if projects_data:
-                # Re-use the Code + Name format for the dropdown
-                proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data}
+                # ROLE CHECK: Filter allowed projects based on the user's role
+                if selected_member_role in ["Principal Architect", "Manager"]:
+                    allowed_projects = projects_data # Sees everything
+                else:
+                    # Standard team members only see projects where they are explicitly assigned as the team_lead
+                    allowed_projects = [p for p in projects_data if p.get('team_lead') == selected_member_id]
                 
-                with st.form("update_project_form"):
-                    selected_proj_to_update = st.selectbox("Select Project", options=list(proj_update_options.keys()))
+                if not allowed_projects:
+                    st.info("You are not assigned as the Team Lead for any projects.")
+                else:
+                    proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
-                    stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
-                    status_options = ["Critical", "Delay", "On Track", "Hold"]
-                    
-                    new_stage = st.selectbox("Current Stage", options=stage_options)
-                    new_tracking = st.selectbox("Tracking Status", options=status_options)
-                    
-                    if st.form_submit_button("Update Project", type="primary"):
-                        actual_proj_code = proj_update_options[selected_proj_to_update]
+                    with st.form("update_project_form"):
+                        selected_proj_to_update = st.selectbox("Select Project", options=list(proj_update_options.keys()))
                         
-                        try:
-                            # Update the projects table using project_code as the target
-                            supabase.table("projects").update({
+                        stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
+                        status_options = ["Critical", "Delay", "On Track", "Hold"]
+                        
+                        new_stage = st.selectbox("Current Stage", options=stage_options)
+                        new_tracking = st.selectbox("Tracking Status", options=status_options)
+                        
+                        # SUPERPOWER CHECK: Only render the main status selectbox for leadership
+                        new_main_status = None
+                        if selected_member_role in ["Principal Architect", "Manager"]:
+                            new_main_status = st.selectbox("Main Project Status", options=["Active", "On Hold", "Completed"])
+                        
+                        if st.form_submit_button("Update Project", type="primary"):
+                            actual_proj_code = proj_update_options[selected_proj_to_update]
+                            
+                            # Prepare payload
+                            update_payload = {
                                 "current_stage": new_stage,
                                 "tracking_status": new_tracking
-                            }).eq("project_code", actual_proj_code).execute()
+                            }
+                            # Only inject the main status update if the user had permission to select it
+                            if new_main_status:
+                                update_payload["status"] = new_main_status
                             
-                            st.success(f"Project {actual_proj_code} updated successfully!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to update project: {e}")
+                            try:
+                                supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
+                                st.success(f"Project {actual_proj_code} updated successfully!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update project: {e}")
 
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
