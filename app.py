@@ -23,11 +23,20 @@ page = st.sidebar.radio("Go to", ["Principal Dashboard", "Assign Task", "Team Bo
 if page == "Principal Dashboard":
     st.title("Principal Dashboard")
     
-    # Fetch projects data
     try:
+        # Fetch data globally for the dashboard
         projects_response = supabase.table("projects").select("*").execute()
-        projects_data = projects_response.data
+        team_response = supabase.table("team_members").select("id, full_name").execute()
+        tasks_response = supabase.table("tasks").select("*").execute()
         
+        projects_data = projects_response.data
+        team_data = team_response.data
+        tasks_data = tasks_response.data
+        
+        # Create global mappings
+        id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
+        project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
+
         if projects_data:
             # Calculate metrics
             total_projects = len(projects_data)
@@ -42,41 +51,38 @@ if page == "Principal Dashboard":
                 
             st.divider()
             
-            # Make the Project Directory compact using an expander
+            # --- UPDATED: Project Directory ---
             with st.expander("📂 View Project Directory"):
-                st.dataframe(projects_data, use_container_width=True, hide_index=True)
+                df_projects = pd.DataFrame(projects_data)
+                
+                # Map the team_lead UUID to the actual name
+                if "team_lead" in df_projects.columns:
+                    df_projects["team_lead"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
+                
+                # Define desired columns and filter out created_at/id
+                proj_display_columns = ["project_code", "project_name", "location", "team_lead", "current_stage", "tracking_status"]
+                proj_existing_columns = [col for col in proj_display_columns if col in df_projects.columns]
+                
+                st.dataframe(df_projects[proj_existing_columns], use_container_width=True, hide_index=True)
         else:
             st.info("No projects found in the database. Add some projects to see them here.")
             
     except Exception as e:
-        st.error(f"Error fetching project data: {e}")
+        st.error(f"Error fetching dashboard data: {e}")
 
-    # --- Active Tasks Section with UI Upgrades ---
+    # --- Active Tasks Section ---
     st.divider()
     st.subheader("Active Tasks Dashboard")
     
     try:
-        # Fetch both tasks and team members
-        tasks_response = supabase.table("tasks").select("*").execute()
-        team_response = supabase.table("team_members").select("id, full_name").execute()
-        
-        tasks_data = tasks_response.data
-        team_data = team_response.data
-        
         if tasks_data:
-            # Create dictionary mappings
-            id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
-            # NEW: Mapping project code to project name
-            project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
-            
-            # Load into a Pandas DataFrame for easy filtering and charting
             df_tasks = pd.DataFrame(tasks_data)
             
             # Map UUIDs to human names AND map project_code to project_name
             df_tasks["assigned_to"] = df_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
             df_tasks["project_name"] = df_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
             
-            # --- 1. Interactive Filters ---
+            # --- Interactive Filters ---
             filter_col1, filter_col2 = st.columns(2)
             with filter_col1:
                 all_statuses = df_tasks["status"].unique().tolist() if "status" in df_tasks.columns else []
@@ -86,13 +92,12 @@ if page == "Principal Dashboard":
                 all_members = df_tasks["assigned_to"].unique().tolist()
                 selected_members = st.multiselect("Filter by Team Member", options=all_members, default=all_members)
             
-            # Apply filters to the DataFrame
             filtered_df = df_tasks[
                 (df_tasks["status"].isin(selected_status)) & 
                 (df_tasks["assigned_to"].isin(selected_members))
             ]
             
-            # --- 2. Visual Data (Charts) ---
+            # --- Visual Data (Charts) ---
             st.write("---")
             chart_col1, chart_col2 = st.columns(2)
             
@@ -112,12 +117,11 @@ if page == "Principal Dashboard":
                 else:
                     st.info("No data available for the selected filters.")
 
-            # --- 3. Clean Dataframe ---
+            # --- Clean Dataframe ---
             st.write("---")
             st.markdown("**Task Directory**")
             
             if not filtered_df.empty:
-                # UPDATED: Added project_name to the display columns
                 display_columns = ["project_code", "project_name", "assigned_to", "task_description", "deadline", "status"]
                 clean_df = filtered_df[display_columns]
                 st.dataframe(clean_df, use_container_width=True, hide_index=True)
@@ -126,7 +130,7 @@ if page == "Principal Dashboard":
             st.info("No active tasks found. Head over to 'Assign Task' to delegate some work.")
             
     except Exception as e:
-        st.error(f"Error fetching active tasks: {e}")
+        st.error(f"Error processing active tasks: {e}")
 
 
 # --- Page 2: Assign Task ---
@@ -134,15 +138,12 @@ elif page == "Assign Task":
     st.title("Assign a Task")
     
     try:
-        # UPDATED: Fetch project_name as well
         projects_response = supabase.table("projects").select("project_code, project_name").execute()
         team_response = supabase.table("team_members").select("id, full_name").execute()
         
         projects_data = projects_response.data
         team_data = team_response.data
         
-        # UPDATED: Create a dictionary mapping the formatted display string back to the project_code
-        # e.g., {"LAN 201 (Chitrakoot Farms)": "LAN 201"}
         project_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data} if projects_data else {}
         team_options = {t['full_name']: t['id'] for t in team_data} if team_data else {}
         
@@ -156,7 +157,6 @@ elif page == "Assign Task":
         with st.form("task_assignment_form", clear_on_submit=True):
             st.subheader("Task Details")
             
-            # UPDATED: Dropdown now uses the combined "Code (Name)" string
             selected_project_display = st.selectbox("Select Project", options=list(project_options.keys()))
             selected_member = st.selectbox("Assign To", options=list(team_options.keys()))
             
@@ -169,12 +169,11 @@ elif page == "Assign Task":
                 if not task_description_input.strip():
                     st.error("Please provide a task description.")
                 else:
-                    # Retrieve the underlying IDs/Codes
                     member_id = team_options[selected_member]
                     actual_project_code = project_options[selected_project_display]
                     
                     new_task = {
-                        "project_code": actual_project_code, # Inserting just the code
+                        "project_code": actual_project_code, 
                         "assigned_to": member_id,                  
                         "task_description": task_description_input, 
                         "deadline": deadline.isoformat(),
@@ -192,7 +191,6 @@ elif page == "Team Board":
     st.title("Team Board")
     
     try:
-        # Fetch tasks, team members, AND projects (needed for the new project_name column)
         tasks_response = supabase.table("tasks").select("*").execute()
         team_response = supabase.table("team_members").select("id, full_name").execute()
         projects_response = supabase.table("projects").select("project_code, project_name").execute()
@@ -209,7 +207,7 @@ elif page == "Team Board":
             id_to_name_map = {member['id']: member['full_name'] for member in team_data}
             project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
             
-            # --- 1. Top Level Filter ---
+            # --- Top Level Filter ---
             selected_member_name = st.selectbox("Select Your Name", options=list(name_to_id_map.keys()))
             selected_member_id = name_to_id_map[selected_member_name]
             
@@ -219,7 +217,6 @@ elif page == "Team Board":
             my_tasks = [task for task in tasks_data if task.get('assigned_to') == selected_member_id]
             
             if my_tasks:
-                # --- 2. Clean Dataframe ---
                 st.subheader(f"Tasks for {selected_member_name}")
                 df_my_tasks = pd.DataFrame(my_tasks)
                 
@@ -227,18 +224,14 @@ elif page == "Team Board":
                 df_my_tasks["assigned_to"] = df_my_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
                 df_my_tasks["project_name"] = df_my_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
                 
-                # UPDATED: Added project_name to the display columns
                 display_columns = ["project_code", "project_name", "assigned_to", "task_description", "deadline", "status"]
-                
-                # Ensure we only try to display columns that exist to prevent errors
                 existing_columns = [col for col in display_columns if col in df_my_tasks.columns]
                 st.dataframe(df_my_tasks[existing_columns], use_container_width=True, hide_index=True)
                 
-                # --- 3. Update Task Status Section ---
+                # --- Update Task Status Section ---
                 st.divider()
                 st.subheader("Update Task Status")
                 
-                # Create a mapping dictionary for the selectbox: { "Project_Code: Description..." : Task_ID }
                 task_options = {f"{t['project_code']} - {t['task_description'][:40]}...": t['id'] for t in my_tasks}
                 
                 selected_task_display = st.selectbox("Select Task to Update", options=list(task_options.keys()))
@@ -246,15 +239,46 @@ elif page == "Team Board":
                 
                 if st.button("Update Status", type="primary"):
                     task_id_to_update = task_options[selected_task_display]
-                    
                     try:
                         supabase.table("tasks").update({"status": new_status}).eq("id", task_id_to_update).execute()
-                        st.success("Status updated successfully!")
+                        st.success("Task status updated successfully!")
                         st.rerun() 
                     except Exception as e:
                         st.error(f"Failed to update task: {e}")
             else:
                 st.info(f"No active tasks assigned to {selected_member_name}.")
                 
+            # --- NEW: Update Project Status Section ---
+            st.divider()
+            st.subheader("Update Project Status")
+            
+            if projects_data:
+                # Re-use the Code + Name format for the dropdown
+                proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data}
+                
+                with st.form("update_project_form"):
+                    selected_proj_to_update = st.selectbox("Select Project", options=list(proj_update_options.keys()))
+                    
+                    stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
+                    status_options = ["Critical", "Delay", "On Track", "Hold"]
+                    
+                    new_stage = st.selectbox("Current Stage", options=stage_options)
+                    new_tracking = st.selectbox("Tracking Status", options=status_options)
+                    
+                    if st.form_submit_button("Update Project", type="primary"):
+                        actual_proj_code = proj_update_options[selected_proj_to_update]
+                        
+                        try:
+                            # Update the projects table using project_code as the target
+                            supabase.table("projects").update({
+                                "current_stage": new_stage,
+                                "tracking_status": new_tracking
+                            }).eq("project_code", actual_proj_code).execute()
+                            
+                            st.success(f"Project {actual_proj_code} updated successfully!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update project: {e}")
+
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
