@@ -49,6 +49,41 @@ if page == "Principal Dashboard":
     except Exception as e:
         st.error(f"Error fetching project data: {e}")
 
+    # --- NEW: Active Tasks Section ---
+    st.divider()
+    st.subheader("Active Tasks")
+    
+    try:
+        # Fetch both tasks and team members
+        tasks_response = supabase.table("tasks").select("*").execute()
+        team_response = supabase.table("team_members").select("id, full_name").execute()
+        
+        tasks_data = tasks_response.data
+        team_data = team_response.data
+        
+        if tasks_data:
+            # Create a dictionary mapping: { UUID : Full Name }
+            id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
+            
+            # Format the tasks data to replace UUIDs with human names
+            display_tasks = []
+            for task in tasks_data:
+                formatted_task = task.copy()
+                uuid = formatted_task.get("assigned_to")
+                
+                # Swap the UUID for the full name. Default to "Unknown" if there's a mismatch.
+                formatted_task["assigned_to"] = id_to_name_map.get(uuid, "Unknown")
+                display_tasks.append(formatted_task)
+            
+            # Display the formatted list as a clean dataframe
+            st.dataframe(display_tasks, use_container_width=True, hide_index=True)
+        else:
+            st.info("No active tasks found. Head over to 'Assign Task' to delegate some work.")
+            
+    except Exception as e:
+        st.error(f"Error fetching active tasks: {e}")
+
+
 # --- Page: Assign Task ---
 elif page == "Assign Task":
     st.title("Assign a Task")
@@ -97,7 +132,7 @@ elif page == "Assign Task":
                     # Prepare data payload with the EXACT column names provided
                     new_task = {
                         "project_code": selected_project, 
-                        "assigned_to": member_id,                  # UPDATED KEY
+                        "assigned_to": member_id,                  
                         "task_description": task_description_input, 
                         "deadline": deadline.isoformat(),
                         "status": "Pending" 
