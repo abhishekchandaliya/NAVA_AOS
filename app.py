@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime
+import pandas as pd
 
 # --- Page Configuration ---
 st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide")
@@ -40,18 +41,19 @@ if page == "Principal Dashboard":
                 st.metric(label="Total Projects (All-time)", value=total_projects)
                 
             st.divider()
-            st.subheader("Project Directory")
-            # Display as a clean dataframe
-            st.dataframe(projects_data, use_container_width=True, hide_index=True)
+            
+            # Make the Project Directory compact using an expander
+            with st.expander("📂 View Project Directory"):
+                st.dataframe(projects_data, use_container_width=True, hide_index=True)
         else:
             st.info("No projects found in the database. Add some projects to see them here.")
             
     except Exception as e:
         st.error(f"Error fetching project data: {e}")
 
-    # --- NEW: Active Tasks Section ---
+    # --- Active Tasks Section with UI Upgrades ---
     st.divider()
-    st.subheader("Active Tasks")
+    st.subheader("Active Tasks Dashboard")
     
     try:
         # Fetch both tasks and team members
@@ -62,21 +64,67 @@ if page == "Principal Dashboard":
         team_data = team_response.data
         
         if tasks_data:
-            # Create a dictionary mapping: { UUID : Full Name }
+            # Create dictionary mapping: { UUID : Full Name }
             id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
             
-            # Format the tasks data to replace UUIDs with human names
-            display_tasks = []
-            for task in tasks_data:
-                formatted_task = task.copy()
-                uuid = formatted_task.get("assigned_to")
-                
-                # Swap the UUID for the full name. Default to "Unknown" if there's a mismatch.
-                formatted_task["assigned_to"] = id_to_name_map.get(uuid, "Unknown")
-                display_tasks.append(formatted_task)
+            # Load into a Pandas DataFrame for easy filtering and charting
+            df_tasks = pd.DataFrame(tasks_data)
             
-            # Display the formatted list as a clean dataframe
-            st.dataframe(display_tasks, use_container_width=True, hide_index=True)
+            # Map UUIDs to human names
+            df_tasks["assigned_to"] = df_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
+            
+            # --- 1. Interactive Filters ---
+            filter_col1, filter_col2 = st.columns(2)
+            with filter_col1:
+                # Get unique statuses, defaulting to empty list if none exist
+                all_statuses = df_tasks["status"].unique().tolist() if "status" in df_tasks.columns else []
+                selected_status = st.multiselect("Filter by Status", options=all_statuses, default=all_statuses)
+                
+            with filter_col2:
+                all_members = df_tasks["assigned_to"].unique().tolist()
+                selected_members = st.multiselect("Filter by Team Member", options=all_members, default=all_members)
+            
+            # Apply filters to the DataFrame
+            filtered_df = df_tasks[
+                (df_tasks["status"].isin(selected_status)) & 
+                (df_tasks["assigned_to"].isin(selected_members))
+            ]
+            
+            # --- 2. Visual Data (Charts) ---
+            st.write("---")
+            chart_col1, chart_col2 = st.columns(2)
+            
+            with chart_col1:
+                st.markdown("**Tasks by Status**")
+                if not filtered_df.empty:
+                    # Count occurrences of each status
+                    status_counts = filtered_df["status"].value_counts()
+                    st.bar_chart(status_counts)
+                else:
+                    st.info("No data available for the selected filters.")
+                    
+            with chart_col2:
+                st.markdown("**Tasks by Team Member**")
+                if not filtered_df.empty:
+                    # Count occurrences of each team member
+                    member_counts = filtered_df["assigned_to"].value_counts()
+                    st.bar_chart(member_counts)
+                else:
+                    st.info("No data available for the selected filters.")
+
+            # --- 3. Clean Dataframe ---
+            st.write("---")
+            st.markdown("**Task Directory**")
+            
+            if not filtered_df.empty:
+                # Explicitly select only the columns you want to see
+                display_columns = ["project_code", "assigned_to", "task_description", "deadline", "status"]
+                
+                # Filter down to just those columns, ignoring any extra backend columns like id or created_at
+                clean_df = filtered_df[display_columns]
+                
+                st.dataframe(clean_df, use_container_width=True, hide_index=True)
+            
         else:
             st.info("No active tasks found. Head over to 'Assign Task' to delegate some work.")
             
