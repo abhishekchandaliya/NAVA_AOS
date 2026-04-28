@@ -55,7 +55,7 @@ elif page == "Assign Task":
     
     # Fetch necessary data for dropdowns
     try:
-        # UPDATED: Selecting only project_code since it is the primary key
+        # Selecting only project_code since it is the primary key
         projects_response = supabase.table("projects").select("project_code").execute()
         team_response = supabase.table("team_members").select("id, full_name").execute()
         
@@ -63,7 +63,6 @@ elif page == "Assign Task":
         team_data = team_response.data
         
         # Create mapping lists/dictionaries
-        # projects is now just a list of codes, team_members remains a mapping dictionary
         project_options = [p['project_code'] for p in projects_data] if projects_data else []
         team_options = {t['full_name']: t['id'] for t in team_data} if team_data else {}
         
@@ -82,25 +81,24 @@ elif page == "Assign Task":
             selected_project = st.selectbox("Select Project", options=project_options)
             selected_member = st.selectbox("Assign To", options=list(team_options.keys()))
             
-            task_description = st.text_area("Task Description", placeholder="e.g., Issue GFC drawings for masonry work...")
+            # Capturing the input text
+            task_description_input = st.text_area("Task Description", placeholder="e.g., Issue GFC drawings for masonry work...")
             deadline = st.date_input("Deadline", min_value=datetime.today())
             
             submitted = st.form_submit_button("Assign Task", type="primary")
             
             if submitted:
-                if not task_description.strip():
+                if not task_description_input.strip():
                     st.error("Please provide a task description.")
                 else:
                     # Retrieve the actual ID for the team member
                     member_id = team_options[selected_member]
                     
-                    # Prepare data payload
-                    # Note: Assuming your 'tasks' table uses 'project_code' as the foreign key column name
-                    # If the column in 'tasks' is named 'project_id', change the key below to "project_id"
+                    # Prepare data payload with the corrected column name
                     new_task = {
                         "project_code": selected_project, 
                         "team_member_id": member_id,
-                        "description": task_description,
+                        "task_description": task_description_input, # UPDATED KEY HERE
                         "deadline": deadline.isoformat(),
                         "status": "Pending" 
                     }
