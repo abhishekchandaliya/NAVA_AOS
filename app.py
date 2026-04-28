@@ -28,7 +28,7 @@ if page == "Principal Dashboard":
         projects_data = projects_response.data
         
         if projects_data:
-            # Calculate metrics (Assuming there's a 'status' column, otherwise just counts total)
+            # Calculate metrics
             total_projects = len(projects_data)
             active_projects = len([p for p in projects_data if p.get('status', 'Active').lower() == 'active'])
             
@@ -55,19 +55,21 @@ elif page == "Assign Task":
     
     # Fetch necessary data for dropdowns
     try:
-        projects_response = supabase.table("projects").select("id, project_code").execute()
+        # UPDATED: Selecting only project_code since it is the primary key
+        projects_response = supabase.table("projects").select("project_code").execute()
         team_response = supabase.table("team_members").select("id, full_name").execute()
         
         projects_data = projects_response.data
         team_data = team_response.data
         
-        # Create mapping dictionaries (Display Name -> Database ID)
-        project_options = {p['project_code']: p['id'] for p in projects_data} if projects_data else {}
+        # Create mapping lists/dictionaries
+        # projects is now just a list of codes, team_members remains a mapping dictionary
+        project_options = [p['project_code'] for p in projects_data] if projects_data else []
         team_options = {t['full_name']: t['id'] for t in team_data} if team_data else {}
         
     except Exception as e:
         st.error(f"Error loading form data: {e}")
-        project_options, team_options = {}, {}
+        project_options, team_options = [], {}
 
     if not project_options or not team_options:
         st.warning("Ensure you have at least one project and one team member in your database before assigning tasks.")
@@ -76,8 +78,8 @@ elif page == "Assign Task":
         with st.form("task_assignment_form", clear_on_submit=True):
             st.subheader("Task Details")
             
-            # Dropdowns using the keys of our mapping dictionaries
-            selected_project = st.selectbox("Select Project", options=list(project_options.keys()))
+            # Dropdowns
+            selected_project = st.selectbox("Select Project", options=project_options)
             selected_member = st.selectbox("Assign To", options=list(team_options.keys()))
             
             task_description = st.text_area("Task Description", placeholder="e.g., Issue GFC drawings for masonry work...")
@@ -89,17 +91,18 @@ elif page == "Assign Task":
                 if not task_description.strip():
                     st.error("Please provide a task description.")
                 else:
-                    # Retrieve the actual IDs using the mapping dictionaries
-                    project_id = project_options[selected_project]
+                    # Retrieve the actual ID for the team member
                     member_id = team_options[selected_member]
                     
                     # Prepare data payload
+                    # Note: Assuming your 'tasks' table uses 'project_code' as the foreign key column name
+                    # If the column in 'tasks' is named 'project_id', change the key below to "project_id"
                     new_task = {
-                        "project_id": project_id,
+                        "project_code": selected_project, 
                         "team_member_id": member_id,
                         "description": task_description,
                         "deadline": deadline.isoformat(),
-                        "status": "Pending" # Default status
+                        "status": "Pending" 
                     }
                     
                     # Insert into Supabase
