@@ -26,7 +26,6 @@ if page == "Principal Dashboard":
     try:
         # Fetch data globally for the dashboard
         projects_response = supabase.table("projects").select("*").execute()
-        # UPDATED: Included 'role' in the select statement
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
         tasks_response = supabase.table("tasks").select("*").execute()
         
@@ -140,7 +139,6 @@ elif page == "Assign Task":
     
     try:
         projects_response = supabase.table("projects").select("project_code, project_name").execute()
-        # UPDATED: Included 'role'
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
         
         projects_data = projects_response.data
@@ -194,9 +192,8 @@ elif page == "Team Board":
     
     try:
         tasks_response = supabase.table("tasks").select("*").execute()
-        # UPDATED: Fetch 'role' to enable permissions logic
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
-        projects_response = supabase.table("projects").select("*").execute() # Need all columns for filtering team_lead
+        projects_response = supabase.table("projects").select("*").execute() 
         
         tasks_data = tasks_response.data
         team_data = team_response.data
@@ -208,14 +205,13 @@ elif page == "Team Board":
             # Create mappings
             name_to_id_map = {member['full_name']: member['id'] for member in team_data}
             id_to_name_map = {member['id']: member['full_name'] for member in team_data}
-            # NEW: Mapping to easily retrieve the role of the selected user
             name_to_role_map = {member['full_name']: member.get('role', 'Team Member') for member in team_data}
             project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
             
             # --- Top Level Filter ---
             selected_member_name = st.selectbox("Select Your Name", options=list(name_to_id_map.keys()))
             selected_member_id = name_to_id_map[selected_member_name]
-            selected_member_role = name_to_role_map[selected_member_name] # Fetch role
+            selected_member_role = name_to_role_map[selected_member_name] 
             
             st.divider()
             
@@ -271,23 +267,38 @@ elif page == "Team Board":
                 else:
                     proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
+                    # 1. Project Selection MUST be outside the form to trigger a rerun when changed
+                    selected_proj_to_update = st.selectbox("Select Project to Update", options=list(proj_update_options.keys()))
+                    actual_proj_code = proj_update_options[selected_proj_to_update]
+                    
+                    # 2. Extract current values from the specific project selected
+                    selected_project_data = next((p for p in allowed_projects if p['project_code'] == actual_proj_code), {})
+                    
+                    current_stage_val = selected_project_data.get('current_stage')
+                    current_tracking_val = selected_project_data.get('tracking_status')
+                    current_status_val = selected_project_data.get('status')
+                    
+                    # Define lists
+                    stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
+                    status_options = ["Critical", "Delay", "On Track", "Hold"]
+                    main_status_options = ["Active", "On Hold", "Completed"]
+                    
+                    # Calculate index safely (defaults to 0 if the value doesn't exist or doesn't match exactly)
+                    stage_idx = stage_options.index(current_stage_val) if current_stage_val in stage_options else 0
+                    tracking_idx = status_options.index(current_tracking_val) if current_tracking_val in status_options else 0
+                    main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
+                    
+                    # 3. Create the form with the pre-calculated indices passed as defaults
                     with st.form("update_project_form"):
-                        selected_proj_to_update = st.selectbox("Select Project", options=list(proj_update_options.keys()))
-                        
-                        stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
-                        status_options = ["Critical", "Delay", "On Track", "Hold"]
-                        
-                        new_stage = st.selectbox("Current Stage", options=stage_options)
-                        new_tracking = st.selectbox("Tracking Status", options=status_options)
+                        new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
+                        new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
                         
                         # SUPERPOWER CHECK: Only render the main status selectbox for leadership
                         new_main_status = None
                         if selected_member_role in ["Principal Architect", "Manager"]:
-                            new_main_status = st.selectbox("Main Project Status", options=["Active", "On Hold", "Completed"])
+                            new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
                         
-                        if st.form_submit_button("Update Project", type="primary"):
-                            actual_proj_code = proj_update_options[selected_proj_to_update]
-                            
+                        if st.form_submit_button("Update Project Details", type="primary"):
                             # Prepare payload
                             update_payload = {
                                 "current_stage": new_stage,
