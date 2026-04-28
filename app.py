@@ -1,7 +1,8 @@
 import streamlit as st
 from supabase import create_client, Client
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
+import altair as alt
 
 # --- Page Configuration ---
 st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide")
@@ -28,10 +29,12 @@ if page == "Principal Dashboard":
         projects_response = supabase.table("projects").select("*").execute()
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
         tasks_response = supabase.table("tasks").select("*").execute()
+        logs_response = supabase.table("team_logs").select("*").execute() # NEW: Fetch logs
         
         projects_data = projects_response.data
         team_data = team_response.data
         tasks_data = tasks_response.data
+        logs_data = logs_response.data
         
         # Create global mappings
         id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
@@ -55,17 +58,77 @@ if page == "Principal Dashboard":
             with st.expander("📂 View Project Directory"):
                 df_projects = pd.DataFrame(projects_data)
                 
-                # Map the team_lead UUID to the actual name
                 if "team_lead" in df_projects.columns:
                     df_projects["team_lead"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
                 
-                # Define desired columns and filter out created_at/id
                 proj_display_columns = ["project_code", "project_name", "location", "team_lead", "current_stage", "tracking_status"]
                 proj_existing_columns = [col for col in proj_display_columns if col in df_projects.columns]
                 
                 st.dataframe(df_projects[proj_existing_columns], use_container_width=True, hide_index=True)
         else:
             st.info("No projects found in the database. Add some projects to see them here.")
+
+        # --- NEW: Resource & Load Management Section ---
+        st.divider()
+        st.subheader("Resource & Load Management")
+        
+        if logs_data:
+            df_logs = pd.DataFrame(logs_data)
+            
+            # Data Mapping for human readability
+            df_logs["Person"] = df_logs["team_member_id"].map(lambda x: id_to_name_map.get(x, "Unknown"))
+            df_logs["Project"] = df_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
+            
+            # Standardize column names for the raw log table
+            df_logs = df_logs.rename(columns={
+                "log_date": "Date",
+                "activity_type": "Activity",
+                "hours_spent": "Hours",
+                "description": "Description"
+            })
+            
+            # Filter for "This Week" (Monday to Current Day)
+            df_logs['Date'] = pd.to_datetime(df_logs['Date']).dt.date
+            today = datetime.today().date()
+            start_of_week = today - timedelta(days=today.weekday())
+            
+            df_week = df_logs[df_logs['Date'] >= start_of_week]
+            
+            if not df_week.empty:
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    st.markdown("**Total Hours Logged this Week by Team Member**")
+                    # Group by person for the bar chart
+                    member_hours = df_week.groupby("Person")["Hours"].sum().reset_index()
+                    st.bar_chart(member_hours.set_index("Person"))
+                    
+                with chart_col2:
+                    st.markdown("**Firm-wide Activity Breakdown (This Week)**")
+                    # Group by activity for the pie chart
+                    activity_hours = df_week.groupby("Activity")["Hours"].sum().reset_index()
+                    
+                    # Create Altair Pie Chart
+                    pie_chart = alt.Chart(activity_hours).mark_arc().encode(
+                        theta=alt.Theta(field="Hours", type="quantitative"),
+                        color=alt.Color(field="Activity", type="nominal"),
+                        tooltip=["Activity", "Hours"]
+                    ).properties(height=300)
+                    
+                    st.altair_chart(pie_chart, use_container_width=True)
+            else:
+                st.info("No hours logged yet this week.")
+                
+            # Display Raw Logs Dataframe
+            st.markdown("**Raw Timesheet Logs**")
+            log_display_cols = ["Date", "Person", "Project", "Hours", "Activity", "Description"]
+            existing_log_cols = [col for col in log_display_cols if col in df_logs.columns]
+            
+            # Sort by Date descending
+            st.dataframe(df_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+            
+        else:
+            st.info("No timesheet logs found in the database yet.")
             
     except Exception as e:
         st.error(f"Error fetching dashboard data: {e}")
@@ -77,12 +140,9 @@ if page == "Principal Dashboard":
     try:
         if tasks_data:
             df_tasks = pd.DataFrame(tasks_data)
-            
-            # Map UUIDs to human names AND map project_code to project_name
             df_tasks["assigned_to"] = df_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
             df_tasks["project_name"] = df_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
             
-            # --- Interactive Filters ---
             filter_col1, filter_col2 = st.columns(2)
             with filter_col1:
                 all_statuses = df_tasks["status"].unique().tolist() if "status" in df_tasks.columns else []
@@ -97,7 +157,6 @@ if page == "Principal Dashboard":
                 (df_tasks["assigned_to"].isin(selected_members))
             ]
             
-            # --- Visual Data (Charts) ---
             st.write("---")
             chart_col1, chart_col2 = st.columns(2)
             
@@ -117,7 +176,6 @@ if page == "Principal Dashboard":
                 else:
                     st.info("No data available for the selected filters.")
 
-            # --- Clean Dataframe ---
             st.write("---")
             st.markdown("**Task Directory**")
             
@@ -125,7 +183,6 @@ if page == "Principal Dashboard":
                 display_columns = ["project_code", "project_name", "assigned_to", "task_description", "deadline", "status"]
                 clean_df = filtered_df[display_columns]
                 st.dataframe(clean_df, use_container_width=True, hide_index=True)
-            
         else:
             st.info("No active tasks found. Head over to 'Assign Task' to delegate some work.")
             
@@ -202,7 +259,6 @@ elif page == "Team Board":
         if not team_data:
             st.warning("No team members found in the database.")
         else:
-            # Create mappings
             name_to_id_map = {member['full_name']: member['id'] for member in team_data}
             id_to_name_map = {member['id']: member['full_name'] for member in team_data}
             name_to_role_map = {member['full_name']: member.get('role', 'Team Member') for member in team_data}
@@ -222,7 +278,6 @@ elif page == "Team Board":
                 st.subheader(f"Tasks for {selected_member_name}")
                 df_my_tasks = pd.DataFrame(my_tasks)
                 
-                # Swap UUID for Human Name AND Map Project Code to Project Name
                 df_my_tasks["assigned_to"] = df_my_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
                 df_my_tasks["project_name"] = df_my_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
                 
@@ -255,11 +310,9 @@ elif page == "Team Board":
             st.subheader("Update Project Status")
             
             if projects_data:
-                # ROLE CHECK: Filter allowed projects based on the user's role
                 if selected_member_role in ["Principal Architect", "Manager"]:
-                    allowed_projects = projects_data # Sees everything
+                    allowed_projects = projects_data
                 else:
-                    # Standard team members only see projects where they are explicitly assigned as the team_lead
                     allowed_projects = [p for p in projects_data if p.get('team_lead') == selected_member_id]
                 
                 if not allowed_projects:
@@ -267,44 +320,36 @@ elif page == "Team Board":
                 else:
                     proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
-                    # 1. Project Selection MUST be outside the form to trigger a rerun when changed
                     selected_proj_to_update = st.selectbox("Select Project to Update", options=list(proj_update_options.keys()))
                     actual_proj_code = proj_update_options[selected_proj_to_update]
                     
-                    # 2. Extract current values from the specific project selected
                     selected_project_data = next((p for p in allowed_projects if p['project_code'] == actual_proj_code), {})
                     
                     current_stage_val = selected_project_data.get('current_stage')
                     current_tracking_val = selected_project_data.get('tracking_status')
                     current_status_val = selected_project_data.get('status')
                     
-                    # Define lists
                     stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
                     status_options = ["Critical", "Delay", "On Track", "Hold"]
                     main_status_options = ["Active", "On Hold", "Completed"]
                     
-                    # Calculate index safely (defaults to 0 if the value doesn't exist or doesn't match exactly)
                     stage_idx = stage_options.index(current_stage_val) if current_stage_val in stage_options else 0
                     tracking_idx = status_options.index(current_tracking_val) if current_tracking_val in status_options else 0
                     main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
                     
-                    # 3. Create the form with the pre-calculated indices passed as defaults
                     with st.form("update_project_form"):
                         new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
                         new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
                         
-                        # SUPERPOWER CHECK: Only render the main status selectbox for leadership
                         new_main_status = None
                         if selected_member_role in ["Principal Architect", "Manager"]:
                             new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
                         
                         if st.form_submit_button("Update Project Details", type="primary"):
-                            # Prepare payload
                             update_payload = {
                                 "current_stage": new_stage,
                                 "tracking_status": new_tracking
                             }
-                            # Only inject the main status update if the user had permission to select it
                             if new_main_status:
                                 update_payload["status"] = new_main_status
                             
@@ -314,6 +359,44 @@ elif page == "Team Board":
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to update project: {e}")
+
+            # --- NEW: Submit Daily Log Section ---
+            st.divider()
+            st.subheader("Submit Daily Log")
+            
+            # Prepare options specifically for the log (all projects + Internal)
+            log_project_options = {"Internal/No Project": "INTERNAL"}
+            if projects_data:
+                log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
+            
+            with st.form("daily_log_form", clear_on_submit=True):
+                log_date = st.date_input("Date", value=datetime.today())
+                log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
+                
+                activity_choices = ["Drafting/3D", "Site Visit", "Client Meeting", "Vendor Coordination", "Internal Review", "Admin/General"]
+                log_activity = st.selectbox("Activity Type", options=activity_choices)
+                
+                log_hours = st.number_input("Hours Spent", min_value=0.5, step=0.5, value=1.0)
+                log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
+                
+                if st.form_submit_button("Submit Log", type="primary"):
+                    if not log_desc.strip():
+                        st.error("Please provide a brief description of the work done.")
+                    else:
+                        log_payload = {
+                            "team_member_id": selected_member_id,
+                            "project_code": log_project_options[log_proj_display],
+                            "log_date": log_date.isoformat(),
+                            "activity_type": log_activity,
+                            "hours_spent": log_hours,
+                            "description": log_desc
+                        }
+                        
+                        try:
+                            supabase.table("team_logs").insert(log_payload).execute()
+                            st.success(f"Log submitted successfully for {log_hours} hours!")
+                        except Exception as e:
+                            st.error(f"Failed to submit log: {e}")
 
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
