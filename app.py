@@ -94,11 +94,11 @@ elif page == "Assign Task":
                     # Retrieve the actual ID for the team member
                     member_id = team_options[selected_member]
                     
-                    # Prepare data payload with the corrected column name
+                    # Prepare data payload with the EXACT column names provided
                     new_task = {
                         "project_code": selected_project, 
-                        "team_member_id": member_id,
-                        "task_description": task_description_input, # UPDATED KEY HERE
+                        "assigned_to": member_id,                  # UPDATED KEY
+                        "task_description": task_description_input, 
                         "deadline": deadline.isoformat(),
                         "status": "Pending" 
                     }
