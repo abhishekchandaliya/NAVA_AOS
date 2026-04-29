@@ -29,7 +29,7 @@ if page == "Principal Dashboard":
         projects_response = supabase.table("projects").select("*").execute()
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
         tasks_response = supabase.table("tasks").select("*").execute()
-        logs_response = supabase.table("team_logs").select("*").execute() # NEW: Fetch logs
+        logs_response = supabase.table("team_logs").select("*").execute()
         
         projects_data = projects_response.data
         team_data = team_response.data
@@ -68,7 +68,7 @@ if page == "Principal Dashboard":
         else:
             st.info("No projects found in the database. Add some projects to see them here.")
 
-        # --- NEW: Resource & Load Management Section ---
+        # --- Resource & Load Management Section ---
         st.divider()
         st.subheader("Resource & Load Management")
         
@@ -99,16 +99,13 @@ if page == "Principal Dashboard":
                 
                 with chart_col1:
                     st.markdown("**Total Hours Logged this Week by Team Member**")
-                    # Group by person for the bar chart
                     member_hours = df_week.groupby("Person")["Hours"].sum().reset_index()
                     st.bar_chart(member_hours.set_index("Person"))
                     
                 with chart_col2:
                     st.markdown("**Firm-wide Activity Breakdown (This Week)**")
-                    # Group by activity for the pie chart
                     activity_hours = df_week.groupby("Activity")["Hours"].sum().reset_index()
                     
-                    # Create Altair Pie Chart
                     pie_chart = alt.Chart(activity_hours).mark_arc().encode(
                         theta=alt.Theta(field="Hours", type="quantitative"),
                         color=alt.Color(field="Activity", type="nominal"),
@@ -124,7 +121,6 @@ if page == "Principal Dashboard":
             log_display_cols = ["Date", "Person", "Project", "Hours", "Activity", "Description"]
             existing_log_cols = [col for col in log_display_cols if col in df_logs.columns]
             
-            # Sort by Date descending
             st.dataframe(df_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
             
         else:
@@ -195,13 +191,27 @@ elif page == "Assign Task":
     st.title("Assign a Task")
     
     try:
-        projects_response = supabase.table("projects").select("project_code, project_name").execute()
+        # UPDATED: Fetch team_lead from projects table
+        projects_response = supabase.table("projects").select("project_code, project_name, team_lead").execute()
         team_response = supabase.table("team_members").select("id, full_name, role").execute()
         
         projects_data = projects_response.data
         team_data = team_response.data
         
-        project_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data} if projects_data else {}
+        id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
+        
+        # UPDATED: Format the project display string to include the Team Lead
+        project_options = {}
+        if projects_data:
+            for p in projects_data:
+                code = p['project_code']
+                name = p.get('project_name', 'Unknown')
+                lead_id = p.get('team_lead')
+                lead_name = id_to_name_map.get(lead_id, "Unassigned")
+                
+                display_string = f"{code} ({name}) - Lead: {lead_name}"
+                project_options[display_string] = code
+                
         team_options = {t['full_name']: t['id'] for t in team_data} if team_data else {}
         
     except Exception as e:
@@ -211,37 +221,61 @@ elif page == "Assign Task":
     if not project_options or not team_options:
         st.warning("Ensure you have at least one project and one team member in your database before assigning tasks.")
     else:
+        # --- NEW: Standard Architectural Tasks Dictionary ---
+        TASK_DICTIONARY = {
+            "Concept Design": ["Site Analysis", "Moodboard & References", "Conceptual Layouts", "Volume Massing", "Initial Presentation", "Client Revisions"],
+            "Working Drawings": ["Floor Plans", "Elevations", "Sections", "Door/Window Schedule", "Flooring Layout", "Masonry Details", "Staircase Details"],
+            "MEP Services": ["Electrical Layout", "Plumbing Layout", "HVAC Layout", "Fire Safety Plan", "Reflected Ceiling Plan (RCP)"],
+            "3D Visualization": ["Exterior 3D Views", "Interior 3D Views", "Walkthrough Animation", "Material & Lighting Setup", "Post-Production"],
+            "Site Execution": ["Site Marking / Layout", "Steel / Reinforcement Checking", "Pouring Supervision", "Vendor Coordination", "Quality Check / Snag List"],
+            "Admin / General": ["Permit Drawings", "BOQ & Estimation", "Client Handover Package", "Team Meeting"]
+        }
+
         with st.form("task_assignment_form", clear_on_submit=True):
             st.subheader("Task Details")
             
             selected_project_display = st.selectbox("Select Project", options=list(project_options.keys()))
             selected_member = st.selectbox("Assign To", options=list(team_options.keys()))
             
-            task_description_input = st.text_area("Task Description", placeholder="e.g., Issue GFC drawings for masonry work...")
+            st.divider()
+            st.markdown("##### Task Specifications")
+            
+            # --- NEW: Cascading Menus for Task Description ---
+            col1, col2 = st.columns(2)
+            with col1:
+                task_category = st.selectbox("Task Category", options=list(TASK_DICTIONARY.keys()))
+            with col2:
+                # The options here update dynamically based on the category chosen above
+                task_deliverable = st.selectbox("Standard Deliverable", options=TASK_DICTIONARY[task_category])
+                
+            additional_notes = st.text_input("Additional Notes (Optional)", placeholder="e.g., Check column grid dimensions on ground floor.")
+            
             deadline = st.date_input("Deadline", min_value=datetime.today())
             
             submitted = st.form_submit_button("Assign Task", type="primary")
             
             if submitted:
-                if not task_description_input.strip():
-                    st.error("Please provide a task description.")
-                else:
-                    member_id = team_options[selected_member]
-                    actual_project_code = project_options[selected_project_display]
-                    
-                    new_task = {
-                        "project_code": actual_project_code, 
-                        "assigned_to": member_id,                  
-                        "task_description": task_description_input, 
-                        "deadline": deadline.isoformat(),
-                        "status": "Pending" 
-                    }
-                    
-                    try:
-                        supabase.table("tasks").insert(new_task).execute()
-                        st.success(f"Task successfully assigned to {selected_member} for project {actual_project_code}!")
-                    except Exception as e:
-                        st.error(f"Failed to assign task: {e}")
+                # Combine inputs into the final formatted string
+                final_description = f"{task_category} - {task_deliverable}"
+                if additional_notes.strip():
+                    final_description += f". Notes: {additional_notes.strip()}"
+                
+                member_id = team_options[selected_member]
+                actual_project_code = project_options[selected_project_display]
+                
+                new_task = {
+                    "project_code": actual_project_code, 
+                    "assigned_to": member_id,                  
+                    "task_description": final_description, # Use the concatenated string 
+                    "deadline": deadline.isoformat(),
+                    "status": "Pending" 
+                }
+                
+                try:
+                    supabase.table("tasks").insert(new_task).execute()
+                    st.success(f"Task successfully assigned to {selected_member} for project {actual_project_code}!")
+                except Exception as e:
+                    st.error(f"Failed to assign task: {e}")
 
 # --- Page 3: Team Board ---
 elif page == "Team Board":
@@ -360,11 +394,10 @@ elif page == "Team Board":
                             except Exception as e:
                                 st.error(f"Failed to update project: {e}")
 
-            # --- NEW: Submit Daily Log Section ---
+            # --- Submit Daily Log Section ---
             st.divider()
             st.subheader("Submit Daily Log")
             
-            # Prepare options specifically for the log (all projects + Internal)
             log_project_options = {"Internal/No Project": "INTERNAL"}
             if projects_data:
                 log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
