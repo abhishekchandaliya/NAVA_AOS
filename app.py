@@ -14,6 +14,9 @@ if 'selected_project_code' not in st.session_state:
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
+def open_cockpit(project_code):
+    st.session_state.selected_project_code = project_code
+
 # --- Database Connection ---
 @st.cache_resource
 def init_connection() -> Client:
@@ -73,7 +76,7 @@ if page == "Principal Dashboard":
         projects_response = supabase.table("projects").select("*").execute()
         tasks_response = supabase.table("tasks").select("*").execute()
         logs_response = supabase.table("team_logs").select("*").execute()
-        ledger_response = supabase.table("project_ledger").select("*").execute() # NEW: Fetch Ledger
+        ledger_response = supabase.table("project_ledger").select("*").execute() 
         
         projects_data = projects_response.data
         tasks_data = tasks_response.data
@@ -106,14 +109,14 @@ if page == "Principal Dashboard":
                     
                     if not proj_ledger.empty:
                         proj_ledger['created_at'] = pd.to_datetime(proj_ledger['created_at'])
-                        # Get the most recent entry for each category
                         idx_max = proj_ledger.groupby('category')['created_at'].idxmax()
                         summary_df = proj_ledger.loc[idx_max].sort_values('created_at', ascending=False)
                         
                         cols = st.columns(len(summary_df))
                         for i, (_, row) in enumerate(summary_df.iterrows()):
                             with cols[i]:
-                                st.info(f"**{row['category']}**\n\n{row['entry_text']}\n\n*(Updated: {row['created_at'].strftime('%Y-%m-%d')})*")
+                                # UPDATED: Using 'content' instead of 'entry_text'
+                                st.info(f"**{row['category']}**\n\n{row.get('content', '')}\n\n*(Updated: {row['created_at'].strftime('%Y-%m-%d')})*")
                     else:
                         st.write("No updates logged for this project yet.")
                 else:
@@ -121,52 +124,21 @@ if page == "Principal Dashboard":
                     
                 st.divider()
                 
-                # --- Split View: Ledger & Team Lead Tools ---
-                col_ledger, col_tools = st.columns([2, 1])
-                
-                with col_ledger:
-                    st.subheader("Activity Ledger")
-                    if not df_ledger.empty and not proj_ledger.empty:
-                        display_ledger = proj_ledger.copy()
-                        display_ledger['Team Member'] = display_ledger['team_member_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
-                        display_ledger = display_ledger.rename(columns={"created_at": "Date", "category": "Category", "entry_text": "Details", "action_type": "Action Required"})
-                        
-                        view_cols = ["Date", "Category", "Team Member", "Details", "Action Required"]
-                        view_cols = [c for c in view_cols if c in display_ledger.columns]
-                        st.dataframe(display_ledger[view_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
-                    else:
-                        st.write("Ledger is empty.")
-                
-                with col_tools:
-                    st.subheader("Log Project Update")
-                    with st.form("add_ledger_entry", clear_on_submit=True):
-                        update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
-                        update_text = st.text_area("Update Details")
-                        
-                        st.markdown("**Principal Escalation**")
-                        flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
-                        action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
-                        
-                        if st.form_submit_button("Submit Update", type="primary"):
-                            if flag_principal and action_type == "None":
-                                st.error("Please select an Action Type when flagging for the Principal.")
-                            elif not update_text.strip():
-                                st.error("Please provide update details.")
-                            else:
-                                new_entry = {
-                                    "project_code": target_code,
-                                    "team_member_id": selected_member_id,
-                                    "category": update_category,
-                                    "entry_text": update_text,
-                                    "is_principal_action_required": flag_principal,
-                                    "action_type": action_type if flag_principal else None
-                                }
-                                try:
-                                    supabase.table("project_ledger").insert(new_entry).execute()
-                                    st.success("Update logged successfully!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to log update: {e}")
+                # --- Full Width Ledger (Form moved to Team Board) ---
+                st.subheader("Activity Ledger")
+                if not df_ledger.empty and not proj_ledger.empty:
+                    display_ledger = proj_ledger.copy()
+                    display_ledger['Team Member'] = display_ledger['team_member_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
+                    
+                    # UPDATED: Mapping 'content' instead of 'entry_text'
+                    display_ledger = display_ledger.rename(columns={"created_at": "Date", "category": "Category", "content": "Details", "action_type": "Action Required"})
+                    
+                    view_cols = ["Date", "Category", "Team Member", "Details", "Action Required"]
+                    view_cols = [c for c in view_cols if c in display_ledger.columns]
+                    st.dataframe(display_ledger[view_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+                else:
+                    st.write("Ledger is empty.")
+                    
             else:
                 st.error("Project details not found.")
 
@@ -176,29 +148,35 @@ if page == "Principal Dashboard":
         else:
             st.title("Principal Dashboard")
             
-            # --- Principal Action Center ---
+            # --- Principal Action Center (One-Click Resolution) ---
             df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
             if not df_ledger.empty and 'is_principal_action_required' in df_ledger.columns:
                 action_req_df = df_ledger[df_ledger['is_principal_action_required'] == True].copy()
                 
                 if not action_req_df.empty:
                     st.error("### 🔴 Principal Intervention Required")
-                    action_req_df['Project'] = action_req_df['project_code'].apply(lambda x: f"{x} - {project_map.get(x, 'Unknown')}")
-                    action_req_df['Requested By'] = action_req_df['team_member_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
-                    action_req_df['Date'] = pd.to_datetime(action_req_df['created_at']).dt.date
                     
-                    action_cols = ["Date", "Project", "action_type", "category", "entry_text", "Requested By"]
-                    action_cols = [c for c in action_cols if c in action_req_df.columns]
-                    
-                    # Rename for display
-                    rename_dict = {"action_type": "Action Needed", "category": "Dept", "entry_text": "Details"}
-                    action_req_df = action_req_df.rename(columns=rename_dict)
-                    display_action_cols = [rename_dict.get(c, c) for c in action_cols]
-                    
-                    st.dataframe(action_req_df[display_action_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+                    # Iterate through flagged items to create interactive rows
+                    for idx, row in action_req_df.sort_values('created_at', ascending=False).iterrows():
+                        proj_code = row['project_code']
+                        proj_name = project_map.get(proj_code, 'Unknown')
+                        req_by = id_to_name_map.get(row.get('team_member_id'), 'Unknown')
+                        action = row.get('action_type', 'Action Required')
+                        date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
+                        details = row.get('content', '') # Mapping schema correction
+                        
+                        with st.container():
+                            c1, c2, c3 = st.columns([4, 2, 1])
+                            with c1:
+                                st.markdown(f"**{proj_code} - {proj_name}** | *{date_str}*")
+                                st.markdown(f"**Reason:** {action} | **Details:** {details}")
+                            with c2:
+                                st.markdown(f"**Requested by:** {req_by}")
+                            with c3:
+                                st.button("View Cockpit", key=f"flag_{row.get('id', idx)}", on_click=open_cockpit, args=(proj_code,), type="primary")
+                            st.write("---")
             
             if projects_data:
-                st.divider()
                 dash_tab1, dash_tab2, dash_tab3 = st.tabs(["⚠️ Portfolio Health", "📊 Resource Allocation", "🗂️ Master Directory"])
                 
                 df_projects = pd.DataFrame(projects_data)
@@ -281,7 +259,6 @@ if page == "Principal Dashboard":
                 with dash_tab3:
                     st.subheader("Project Master Directory")
                     
-                    # Tool to enter Cockpit
                     st.markdown("##### 🚀 Access Project Cockpit")
                     cockpit_col1, cockpit_col2 = st.columns([3, 1])
                     with cockpit_col1:
@@ -295,7 +272,6 @@ if page == "Principal Dashboard":
 
                     st.divider()
                     
-                    # Filters
                     lead_options = ["All"] + sorted([str(x) for x in df_projects['team_lead_name'].unique() if pd.notna(x)])
                     stage_options = ["All"] + sorted([str(x) for x in df_projects['current_stage'].unique() if pd.notna(x)])
                     
@@ -463,7 +439,7 @@ elif page == "Team Board":
                 if not allowed_projects:
                     st.info("You are not assigned as the Team Lead for any projects.")
                 else:
-                    st.subheader("Update Project Parameters")
+                    st.subheader("Frictionless Project Update")
                     proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
                     selected_proj_to_update = st.selectbox("Select Project to Update", options=list(proj_update_options.keys()))
@@ -484,27 +460,63 @@ elif page == "Team Board":
                     main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
                     
                     with st.form("update_project_form"):
-                        new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
-                        new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
+                        st.markdown("##### 1. Master Status Adjustments")
+                        col_s1, col_s2 = st.columns(2)
+                        with col_s1:
+                            new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
+                        with col_s2:
+                            new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
                         
                         new_main_status = None
                         if selected_member_role in ["Principal Architect", "Manager"]:
                             new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
                         
-                        if st.form_submit_button("Update Project Details", type="primary"):
-                            update_payload = {
-                                "current_stage": new_stage,
-                                "tracking_status": new_tracking
-                            }
-                            if new_main_status:
-                                update_payload["status"] = new_main_status
+                        st.divider()
+                        
+                        # --- Consolidated Ledger Form ---
+                        st.markdown("##### 2. Log Activity Ledger & Escalations")
+                        update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
+                        update_text = st.text_area("Update Details (Optional but recommended)")
+                        
+                        st.markdown("**Principal Escalation**")
+                        flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
+                        action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
+                        
+                        if st.form_submit_button("Submit Combined Update", type="primary"):
+                            error = False
+                            if flag_principal and action_type == "None":
+                                st.error("Please select an Action Type when flagging for the Principal.")
+                                error = True
                             
-                            try:
-                                supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
-                                st.success(f"Project {actual_proj_code} updated successfully!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to update project: {e}")
+                            if not error:
+                                # 1. Update Project Status Payload
+                                update_payload = {
+                                    "current_stage": new_stage,
+                                    "tracking_status": new_tracking
+                                }
+                                if new_main_status:
+                                    update_payload["status"] = new_main_status
+                                
+                                try:
+                                    supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
+                                    
+                                    # 2. Insert Ledger Entry if text provided or explicitly flagged
+                                    if update_text.strip() or flag_principal:
+                                        new_entry = {
+                                            "project_code": actual_proj_code,
+                                            "team_member_id": selected_member_id,
+                                            "category": update_category,
+                                            # UPDATED: Using 'content' schema mapping
+                                            "content": update_text.strip() if update_text.strip() else "Flagged for intervention.",
+                                            "is_principal_action_required": flag_principal,
+                                            "action_type": action_type if flag_principal else None
+                                        }
+                                        supabase.table("project_ledger").insert(new_entry).execute()
+                                    
+                                    st.success(f"Project {actual_proj_code} updated and ledger entry recorded successfully!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to update project data: {e}")
 
         # === TAB 3: TIME TRACKER & ANALYTICS ===
         with tab3:
