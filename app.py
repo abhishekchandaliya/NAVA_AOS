@@ -17,7 +17,6 @@ def init_connection() -> Client:
 supabase = init_connection()
 
 # --- Global Context & Settings Fetch ---
-# Fetching this at the top level makes the entire app "Role-Aware" and fast.
 try:
     team_response = supabase.table("team_members").select("id, full_name, role").execute()
     settings_response = supabase.table("aos_settings").select("*").execute()
@@ -34,10 +33,11 @@ try:
     settings_map = {row['category']: row.get('options', []) for row in settings_data} if settings_data else {}
     global_activity_types = settings_map.get("activity_types", [])
     global_tags = settings_map.get("tags", [])
+    global_designations = settings_map.get("designations", ["Principal Architect", "Manager", "Team Member"]) # Fallback if empty
     
 except Exception as e:
     st.error(f"Error loading global configuration: {e}")
-    team_data, global_activity_types, global_tags = [], [], []
+    team_data, global_activity_types, global_tags, global_designations = [], [], [], []
 
 # --- Sidebar Navigation & Global Login ---
 st.sidebar.title("AOS Navigation")
@@ -46,7 +46,6 @@ if not team_data:
     st.sidebar.warning("No team members found in the database. Please add users.")
     st.stop()
 
-# This acts as the global login context for the entire application
 selected_member_name = st.sidebar.selectbox("👤 Current User", options=list(name_to_id_map.keys()))
 selected_member_id = name_to_id_map[selected_member_name]
 selected_member_role = name_to_role_map[selected_member_name] 
@@ -56,7 +55,6 @@ st.sidebar.divider()
 # Role-Based Routing
 nav_pages = ["Principal Dashboard", "Assign Task", "Team Board"]
 
-# The Admin page is only injected into the navigation if the user has permission
 if selected_member_role in ["Principal Architect", "Manager"]:
     nav_pages.append("Admin Settings")
 
@@ -80,142 +78,122 @@ if page == "Principal Dashboard":
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
 
         if projects_data:
-            total_projects = len(projects_data)
-            active_projects = len([p for p in projects_data if p.get('status', 'Active').lower() == 'active'])
+            # --- Executive Tabs ---
+            dash_tab1, dash_tab2, dash_tab3 = st.tabs(["⚠️ Portfolio Health", "📊 Resource Allocation", "🗂️ Master Directory"])
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(label="Total Active Projects", value=active_projects)
-            with col2:
-                st.metric(label="Total Projects (All-time)", value=total_projects)
+            # Dataframe prep for projects
+            df_projects = pd.DataFrame(projects_data)
+            if "team_lead" in df_projects.columns:
+                df_projects["team_lead"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
+
+            # --- TAB 1: PORTFOLIO HEALTH ---
+            with dash_tab1:
+                total_projects = len(projects_data)
+                active_projects = len([p for p in projects_data if p.get('status', '').lower() == 'active'])
+                hold_projects = len([p for p in projects_data if p.get('status', '').lower() == 'on hold'])
+                critical_projects = len([p for p in projects_data if p.get('tracking_status', '').lower() == 'critical'])
                 
-            st.divider()
-            
-            with st.expander("📂 View Project Directory"):
-                df_projects = pd.DataFrame(projects_data)
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric(label="Total Active Projects", value=active_projects)
+                with col2:
+                    st.metric(label="Projects On Hold", value=hold_projects)
+                with col3:
+                    st.metric(label="Critical Status", value=critical_projects)
+                with col4:
+                    st.metric(label="Total Portfolio", value=total_projects)
+                    
+                st.divider()
+                st.subheader("⚠️ Action Required")
                 
-                if "team_lead" in df_projects.columns:
-                    df_projects["team_lead"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
+                # Filter for Critical or Delayed projects
+                action_required_df = df_projects[df_projects['tracking_status'].isin(["Critical", "Delay"])]
                 
-                proj_display_columns = ["project_code", "project_name", "location", "team_lead", "current_stage", "tracking_status"]
-                proj_existing_columns = [col for col in proj_display_columns if col in df_projects.columns]
+                if not action_required_df.empty:
+                    display_cols = ["project_code", "project_name", "team_lead", "current_stage", "tracking_status", "status"]
+                    exist_cols = [c for c in display_cols if c in action_required_df.columns]
+                    st.dataframe(action_required_df[exist_cols], use_container_width=True, hide_index=True)
+                else:
+                    st.success("All projects are currently on track! No critical actions required.")
+
+            # --- TAB 2: RESOURCE ALLOCATION ---
+            with dash_tab2:
+                if logs_data:
+                    df_logs = pd.DataFrame(logs_data)
+                    
+                    df_logs["Person"] = df_logs["team_member_id"].map(lambda x: id_to_name_map.get(x, "Unknown"))
+                    df_logs["Project"] = df_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
+                    
+                    df_logs = df_logs.rename(columns={
+                        "log_date": "Date",
+                        "activity_type": "Activity",
+                        "hours_spent": "Hours",
+                        "description": "Description"
+                    })
+                    
+                    df_logs['Date'] = pd.to_datetime(df_logs['Date']).dt.date
+                    today = datetime.today().date()
+                    start_of_week = today - timedelta(days=today.weekday())
+                    
+                    df_week = df_logs[df_logs['Date'] >= start_of_week]
+                    
+                    if not df_week.empty:
+                        chart_col1, chart_col2 = st.columns(2)
+                        with chart_col1:
+                            st.markdown("**Total Hours Logged this Week by Team Member**")
+                            member_hours = df_week.groupby("Person")["Hours"].sum().reset_index()
+                            st.bar_chart(member_hours.set_index("Person"))
+                            
+                        with chart_col2:
+                            st.markdown("**Firm-wide Activity Breakdown (This Week)**")
+                            activity_hours = df_week.groupby("Activity")["Hours"].sum().reset_index()
+                            pie_chart = alt.Chart(activity_hours).mark_arc().encode(
+                                theta=alt.Theta(field="Hours", type="quantitative"),
+                                color=alt.Color(field="Activity", type="nominal"),
+                                tooltip=["Activity", "Hours"]
+                            ).properties(height=300)
+                            st.altair_chart(pie_chart, use_container_width=True)
+                    else:
+                        st.info("No hours logged yet this week.")
+                        
+                    st.divider()
+                    st.markdown("**Raw Timesheet Audit Logs**")
+                    log_display_cols = ["Date", "Person", "Project", "Hours", "Activity", "Description"]
+                    existing_log_cols = [col for col in log_display_cols if col in df_logs.columns]
+                    st.dataframe(df_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No timesheet logs found in the database yet.")
+
+            # --- TAB 3: MASTER DIRECTORY ---
+            with dash_tab3:
+                st.subheader("Project Master Directory")
                 
-                st.dataframe(df_projects[proj_existing_columns], use_container_width=True, hide_index=True)
+                # Dynamic Filters
+                lead_options = ["All"] + sorted([str(x) for x in df_projects['team_lead'].unique() if pd.notna(x)])
+                stage_options = ["All"] + sorted([str(x) for x in df_projects['current_stage'].unique() if pd.notna(x)])
+                
+                filter_col1, filter_col2 = st.columns(2)
+                with filter_col1:
+                    selected_lead = st.selectbox("Filter by Lead Architect", options=lead_options)
+                with filter_col2:
+                    selected_stage = st.selectbox("Filter by Current Stage", options=stage_options)
+                
+                # Apply Filters
+                filtered_dir = df_projects.copy()
+                if selected_lead != "All":
+                    filtered_dir = filtered_dir[filtered_dir['team_lead'] == selected_lead]
+                if selected_stage != "All":
+                    filtered_dir = filtered_dir[filtered_dir['current_stage'] == selected_stage]
+                
+                proj_display_columns = ["project_code", "project_name", "location", "team_lead", "current_stage", "tracking_status", "status"]
+                proj_existing_columns = [col for col in proj_display_columns if col in filtered_dir.columns]
+                st.dataframe(filtered_dir[proj_existing_columns], use_container_width=True, hide_index=True)
+
         else:
             st.info("No projects found in the database. Add some projects to see them here.")
-
-        # --- Resource & Load Management ---
-        st.divider()
-        st.subheader("Resource & Load Management")
-        
-        if logs_data:
-            df_logs = pd.DataFrame(logs_data)
-            
-            df_logs["Person"] = df_logs["team_member_id"].map(lambda x: id_to_name_map.get(x, "Unknown"))
-            df_logs["Project"] = df_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
-            
-            df_logs = df_logs.rename(columns={
-                "log_date": "Date",
-                "activity_type": "Activity",
-                "hours_spent": "Hours",
-                "description": "Description"
-            })
-            
-            df_logs['Date'] = pd.to_datetime(df_logs['Date']).dt.date
-            today = datetime.today().date()
-            start_of_week = today - timedelta(days=today.weekday())
-            
-            df_week = df_logs[df_logs['Date'] >= start_of_week]
-            
-            if not df_week.empty:
-                chart_col1, chart_col2 = st.columns(2)
-                
-                with chart_col1:
-                    st.markdown("**Total Hours Logged this Week by Team Member**")
-                    member_hours = df_week.groupby("Person")["Hours"].sum().reset_index()
-                    st.bar_chart(member_hours.set_index("Person"))
-                    
-                with chart_col2:
-                    st.markdown("**Firm-wide Activity Breakdown (This Week)**")
-                    activity_hours = df_week.groupby("Activity")["Hours"].sum().reset_index()
-                    
-                    pie_chart = alt.Chart(activity_hours).mark_arc().encode(
-                        theta=alt.Theta(field="Hours", type="quantitative"),
-                        color=alt.Color(field="Activity", type="nominal"),
-                        tooltip=["Activity", "Hours"]
-                    ).properties(height=300)
-                    
-                    st.altair_chart(pie_chart, use_container_width=True)
-            else:
-                st.info("No hours logged yet this week.")
-                
-            st.markdown("**Raw Timesheet Logs**")
-            log_display_cols = ["Date", "Person", "Project", "Hours", "Activity", "Description"]
-            existing_log_cols = [col for col in log_display_cols if col in df_logs.columns]
-            
-            st.dataframe(df_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
-            
-        else:
-            st.info("No timesheet logs found in the database yet.")
             
     except Exception as e:
         st.error(f"Error fetching dashboard data: {e}")
-
-    # --- Active Tasks Dashboard ---
-    st.divider()
-    st.subheader("Active Tasks Dashboard")
-    
-    try:
-        if tasks_data:
-            df_tasks = pd.DataFrame(tasks_data)
-            df_tasks["assigned_to"] = df_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
-            df_tasks["project_name"] = df_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
-            
-            filter_col1, filter_col2 = st.columns(2)
-            with filter_col1:
-                all_statuses = df_tasks["status"].unique().tolist() if "status" in df_tasks.columns else []
-                selected_status = st.multiselect("Filter by Status", options=all_statuses, default=all_statuses)
-                
-            with filter_col2:
-                all_members = df_tasks["assigned_to"].unique().tolist()
-                selected_members = st.multiselect("Filter by Team Member", options=all_members, default=all_members)
-            
-            filtered_df = df_tasks[
-                (df_tasks["status"].isin(selected_status)) & 
-                (df_tasks["assigned_to"].isin(selected_members))
-            ]
-            
-            st.write("---")
-            chart_col1, chart_col2 = st.columns(2)
-            
-            with chart_col1:
-                st.markdown("**Tasks by Status**")
-                if not filtered_df.empty:
-                    status_counts = filtered_df["status"].value_counts()
-                    st.bar_chart(status_counts)
-                else:
-                    st.info("No data available for the selected filters.")
-                    
-            with chart_col2:
-                st.markdown("**Tasks by Team Member**")
-                if not filtered_df.empty:
-                    member_counts = filtered_df["assigned_to"].value_counts()
-                    st.bar_chart(member_counts)
-                else:
-                    st.info("No data available for the selected filters.")
-
-            st.write("---")
-            st.markdown("**Task Directory**")
-            
-            if not filtered_df.empty:
-                display_columns = ["project_code", "project_name", "assigned_to", "task_description", "deadline", "status"]
-                clean_df = filtered_df[display_columns]
-                st.dataframe(clean_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No active tasks found. Head over to 'Assign Task' to delegate some work.")
-            
-    except Exception as e:
-        st.error(f"Error processing active tasks: {e}")
 
 # ==========================================
 # PAGE 2: ASSIGN TASK
@@ -258,7 +236,6 @@ elif page == "Assign Task":
             st.subheader("Task Details")
             
             selected_project_display = st.selectbox("Select Project", options=list(project_options.keys()))
-            # Assign To dropdown maps directly to the global team_data
             selected_assignee_name = st.selectbox("Assign To", options=list(name_to_id_map.keys()))
             
             st.divider()
@@ -271,7 +248,6 @@ elif page == "Assign Task":
                 task_deliverable = st.selectbox("Standard Deliverable", options=TASK_DICTIONARY[task_category])
                 
             additional_notes = st.text_input("Additional Notes (Optional)", placeholder="e.g., Check column grid dimensions on ground floor.")
-            
             deadline = st.date_input("Deadline", min_value=datetime.today())
             
             submitted = st.form_submit_button("Assign Task", type="primary")
@@ -316,8 +292,6 @@ elif page == "Team Board":
         
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
         
-        st.divider()
-        
         tab1, tab2, tab3 = st.tabs(["📋 My Tasks", "🏗️ Update Projects", "⏱️ Time Tracker & Analytics"])
         
         # === TAB 1: MY TASKS ===
@@ -337,9 +311,7 @@ elif page == "Team Board":
                 
                 st.divider()
                 st.subheader("Update Task Status")
-                
                 task_options = {f"{t['project_code']} - {t['task_description'][:40]}...": t['id'] for t in my_tasks}
-                
                 selected_task_display = st.selectbox("Select Task to Update", options=list(task_options.keys()))
                 new_status = st.selectbox("Update Status To", options=["Pending", "In Review", "Completed"])
                 
@@ -420,25 +392,18 @@ elif page == "Team Board":
                 log_date = st.date_input("Date", value=datetime.today())
                 log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
                 
-                # DYNAMIC: Fetching Activity Types from global aos_settings
                 if not global_activity_types:
-                    st.warning("No Activity Types found in settings. Using fallback data.")
                     global_activity_types = ['Drawing', 'Admin']
-                
                 log_activity = st.selectbox("Activity Type", options=global_activity_types)
                 
-                # Formatted Time Selection
                 col_h, col_m = st.columns(2)
                 with col_h:
                     hours_input = st.selectbox("Hours", options=list(range(13)), index=1)
                 with col_m:
                     minutes_input = st.selectbox("Minutes", options=[0, 15, 30, 45], index=0)
                 
-                # DYNAMIC: Fetching Tags from global aos_settings
                 if not global_tags:
-                    st.warning("No Tags found in settings. Using fallback data.")
                     global_tags = ['Concept', 'Other']
-                
                 log_tags = st.multiselect("Tags", options=global_tags)
                 
                 log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
@@ -460,7 +425,6 @@ elif page == "Team Board":
                             "description": log_desc,
                             "tags": log_tags
                         }
-                        
                         try:
                             supabase.table("team_logs").insert(log_payload).execute()
                             st.success(f"Log submitted successfully for {total_time:.2f} hours!")
@@ -474,7 +438,6 @@ elif page == "Team Board":
             
             today = datetime.today().date()
             default_start = today - timedelta(days=7)
-            
             date_range = st.date_input("Select Date Range", value=(default_start, today))
             
             if isinstance(date_range, tuple) and len(date_range) == 2:
@@ -482,7 +445,6 @@ elif page == "Team Board":
                 
                 if logs_data:
                     my_logs = [log for log in logs_data if log.get('team_member_id') == selected_member_id]
-                    
                     if my_logs:
                         df_my_logs = pd.DataFrame(my_logs)
                         df_my_logs['log_date'] = pd.to_datetime(df_my_logs['log_date']).dt.date
@@ -495,19 +457,13 @@ elif page == "Team Board":
                             st.metric(label="Total Hours Logged (Selected Period)", value=f"{total_logged_hours:.2f} hrs")
                             
                             df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
-                            
                             df_filtered_logs = df_filtered_logs.rename(columns={
-                                "log_date": "Date",
-                                "project_name": "Project",
-                                "activity_type": "Activity",
-                                "hours_spent": "Hours",
-                                "tags": "Tags",
-                                "description": "Description"
+                                "log_date": "Date", "project_name": "Project", "activity_type": "Activity",
+                                "hours_spent": "Hours", "tags": "Tags", "description": "Description"
                             })
                             
                             display_log_cols = ["Date", "Project", "Activity", "Hours", "Tags", "Description"]
                             existing_log_cols = [c for c in display_log_cols if c in df_filtered_logs.columns]
-                            
                             st.dataframe(df_filtered_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
                         else:
                             st.info("No logs found for the selected date range.")
@@ -523,66 +479,121 @@ elif page == "Team Board":
 # PAGE 4: ADMIN SETTINGS (Restricted)
 # ==========================================
 elif page == "Admin Settings":
-    # Security check: If a user somehow manipulates the URL/state to reach this, explicitly block them
     if selected_member_role not in ["Principal Architect", "Manager"]:
         st.error("Access Denied: You must be a Principal Architect or Manager to view this page.")
     else:
         st.title("Admin Settings")
-        st.markdown("Manage global application configurations and dropdown options.")
+        st.markdown("Manage global application configurations and your team directory.")
         
-        col1, col2 = st.columns(2)
+        # --- Section 1: Global Configurations ---
+        st.subheader("Global Configurations")
+        col1, col2, col3 = st.columns(3)
         
-        # --- Section: Manage Activity Types ---
         with col1:
-            st.subheader("Manage Activity Types")
             with st.form("activity_settings_form"):
+                st.markdown("**Activity Types**")
+                active_activities = st.multiselect("Current Types", options=global_activity_types, default=global_activity_types)
+                new_activity = st.text_input("Add New Type")
                 
-                # Multiselect serves as both a viewer and a rapid removal tool
-                active_activities = st.multiselect(
-                    "Current Activity Types (Click 'X' to remove)", 
-                    options=global_activity_types, 
-                    default=global_activity_types
-                )
-                
-                new_activity = st.text_input("Add New Activity Type", placeholder="e.g., Client Presentation")
-                
-                if st.form_submit_button("Save Activity Types", type="primary"):
+                if st.form_submit_button("Save Activities", type="primary"):
                     final_activities = active_activities.copy()
-                    
-                    # Append new item if it is filled out and doesn't already exist
                     if new_activity.strip() and new_activity.strip() not in final_activities:
                         final_activities.append(new_activity.strip())
-                    
                     try:
-                        # Mutation to update array in Supabase
                         supabase.table("aos_settings").update({"options": final_activities}).eq("category", "activity_types").execute()
-                        st.success("Activity types updated successfully!")
+                        st.success("Updated!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error updating database: {e}")
+                        st.error(f"Error: {e}")
                         
-        # --- Section: Manage Tags ---
         with col2:
-            st.subheader("Manage Tags")
             with st.form("tags_settings_form"):
-                
-                active_tags = st.multiselect(
-                    "Current Tags (Click 'X' to remove)", 
-                    options=global_tags, 
-                    default=global_tags
-                )
-                
-                new_tag = st.text_input("Add New Tag", placeholder="e.g., Urgent")
+                st.markdown("**Timesheet Tags**")
+                active_tags = st.multiselect("Current Tags", options=global_tags, default=global_tags)
+                new_tag = st.text_input("Add New Tag")
                 
                 if st.form_submit_button("Save Tags", type="primary"):
                     final_tags = active_tags.copy()
-                    
                     if new_tag.strip() and new_tag.strip() not in final_tags:
                         final_tags.append(new_tag.strip())
-                    
                     try:
                         supabase.table("aos_settings").update({"options": final_tags}).eq("category", "tags").execute()
-                        st.success("Tags updated successfully!")
+                        st.success("Updated!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error updating database: {e}")
+                        st.error(f"Error: {e}")
+                        
+        with col3:
+            with st.form("designation_settings_form"):
+                st.markdown("**Company Designations**")
+                active_designations = st.multiselect("Current Designations", options=global_designations, default=global_designations)
+                new_designation = st.text_input("Add New Designation")
+                
+                if st.form_submit_button("Save Designations", type="primary"):
+                    final_designations = active_designations.copy()
+                    if new_designation.strip() and new_designation.strip() not in final_designations:
+                        final_designations.append(new_designation.strip())
+                    try:
+                        # Upsert just in case the 'designations' row doesn't exist yet
+                        supabase.table("aos_settings").upsert({"category": "designations", "options": final_designations}).execute()
+                        st.success("Updated!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+        st.divider()
+
+        # --- Section 2: Manage Team Directory ---
+        st.subheader("Manage Team Directory")
+        dir_col1, dir_col2 = st.columns(2)
+        
+        with dir_col1:
+            with st.form("add_employee_form", clear_on_submit=True):
+                st.markdown("**Add New Employee**")
+                new_emp_name = st.text_input("Full Name")
+                new_emp_role = st.selectbox("Designation", options=global_designations)
+                
+                if st.form_submit_button("Add Employee", type="primary"):
+                    if not new_emp_name.strip():
+                        st.error("Please provide a valid name.")
+                    else:
+                        try:
+                            supabase.table("team_members").insert({
+                                "full_name": new_emp_name.strip(),
+                                "role": new_emp_role
+                            }).execute()
+                            st.success(f"{new_emp_name} added successfully!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to add employee: {e}")
+
+        with dir_col2:
+            st.markdown("**Edit or Remove Employee**")
+            # Executing outside a form so we can have two independent action buttons
+            if team_data:
+                emp_to_edit_name = st.selectbox("Select Employee", options=list(name_to_id_map.keys()), key="edit_emp_select")
+                emp_to_edit_id = name_to_id_map.get(emp_to_edit_name)
+                current_role = name_to_role_map.get(emp_to_edit_name, "Team Member")
+                
+                role_idx = global_designations.index(current_role) if current_role in global_designations else 0
+                updated_role = st.selectbox("Update Designation", options=global_designations, index=role_idx)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Update Role", use_container_width=True):
+                        try:
+                            supabase.table("team_members").update({"role": updated_role}).eq("id", emp_to_edit_id).execute()
+                            st.success("Role updated successfully!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Update failed: {e}")
+                with c2:
+                    if st.button("Remove User", type="primary", use_container_width=True):
+                        try:
+                            supabase.table("team_members").delete().eq("id", emp_to_edit_id).execute()
+                            st.success(f"{emp_to_edit_name} removed from the system.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Removal failed: {e}")
+            else:
+                st.info("No employees available to edit.")
