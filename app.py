@@ -122,6 +122,40 @@ if page == "Principal Dashboard":
                     st.write("No updates logged for this project yet.")
                     
                 st.divider()
+
+                # --- NEW: Active Escalations Section ---
+                st.subheader("🚨 Active Escalations")
+                if not df_ledger.empty and 'project_code' in df_ledger.columns:
+                    # Filter for active escalations specific to this project
+                    active_escalations = df_ledger[(df_ledger['project_code'] == target_code) & (df_ledger['is_principal_action_required'] == True)].copy()
+                    
+                    if not active_escalations.empty:
+                        for idx, row in active_escalations.sort_values('created_at', ascending=False).iterrows():
+                            with st.container():
+                                date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
+                                c1, c2 = st.columns([4, 1])
+                                
+                                with c1:
+                                    st.markdown(f"**{row['category']}** | *{date_str}*")
+                                    st.markdown(f"**Action Required:** {row.get('action_type', 'N/A')} | **Details:** {row.get('content', '')}")
+                                
+                                with c2:
+                                    # Unique key using ledger ID ensures Streamlit buttons don't conflict
+                                    if st.button("✅ Mark as Resolved", key=f"resolve_esc_{row.get('id', idx)}", type="primary"):
+                                        try:
+                                            # Execute Supabase update
+                                            supabase.table("project_ledger").update({"is_principal_action_required": False}).eq("id", row['id']).execute()
+                                            st.success("Escalation resolved!")
+                                            st.rerun() # Immediately refresh to remove from list
+                                        except Exception as e:
+                                            st.error(f"Failed to resolve escalation: {e}")
+                            st.write("---")
+                    else:
+                        st.success("No active escalations for this project.")
+                else:
+                    st.success("No active escalations for this project.")
+
+                st.divider()
                 
                 # --- Full Width Ledger ---
                 st.subheader("Activity Ledger")
@@ -496,7 +530,6 @@ elif page == "Team Board":
                                     supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
                                     
                                     if update_text.strip() or flag_principal:
-                                        # UPDATED: Changed key to 'author_id' and 'content' based on schema mapping
                                         new_entry = {
                                             "project_code": actual_proj_code,
                                             "author_id": selected_member_id, 
@@ -548,7 +581,6 @@ elif page == "Team Board":
                     elif not log_desc.strip():
                         st.error("Please provide a brief description of the work done.")
                     else:
-                        # UPDATED: Enforce Foreign Key Constraint (Convert INTERNAL to None/NULL)
                         actual_log_code = log_project_options[log_proj_display]
                         final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
 
