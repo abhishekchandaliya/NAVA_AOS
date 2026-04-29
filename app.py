@@ -115,7 +115,6 @@ if page == "Principal Dashboard":
                         cols = st.columns(len(summary_df))
                         for i, (_, row) in enumerate(summary_df.iterrows()):
                             with cols[i]:
-                                # UPDATED: Using 'content' instead of 'entry_text'
                                 st.info(f"**{row['category']}**\n\n{row.get('content', '')}\n\n*(Updated: {row['created_at'].strftime('%Y-%m-%d')})*")
                     else:
                         st.write("No updates logged for this project yet.")
@@ -124,13 +123,12 @@ if page == "Principal Dashboard":
                     
                 st.divider()
                 
-                # --- Full Width Ledger (Form moved to Team Board) ---
+                # --- Full Width Ledger ---
                 st.subheader("Activity Ledger")
                 if not df_ledger.empty and not proj_ledger.empty:
                     display_ledger = proj_ledger.copy()
-                    display_ledger['Team Member'] = display_ledger['team_member_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
+                    display_ledger['Team Member'] = display_ledger['author_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
                     
-                    # UPDATED: Mapping 'content' instead of 'entry_text'
                     display_ledger = display_ledger.rename(columns={"created_at": "Date", "category": "Category", "content": "Details", "action_type": "Action Required"})
                     
                     view_cols = ["Date", "Category", "Team Member", "Details", "Action Required"]
@@ -156,14 +154,13 @@ if page == "Principal Dashboard":
                 if not action_req_df.empty:
                     st.error("### 🔴 Principal Intervention Required")
                     
-                    # Iterate through flagged items to create interactive rows
                     for idx, row in action_req_df.sort_values('created_at', ascending=False).iterrows():
                         proj_code = row['project_code']
                         proj_name = project_map.get(proj_code, 'Unknown')
-                        req_by = id_to_name_map.get(row.get('team_member_id'), 'Unknown')
+                        req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
                         action = row.get('action_type', 'Action Required')
                         date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
-                        details = row.get('content', '') # Mapping schema correction
+                        details = row.get('content', '') 
                         
                         with st.container():
                             c1, c2, c3 = st.columns([4, 2, 1])
@@ -217,7 +214,7 @@ if page == "Principal Dashboard":
                     if logs_data:
                         df_logs = pd.DataFrame(logs_data)
                         df_logs["Person"] = df_logs["team_member_id"].map(lambda x: id_to_name_map.get(x, "Unknown"))
-                        df_logs["Project"] = df_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
+                        df_logs["Project"] = df_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
                         
                         df_logs = df_logs.rename(columns={
                             "log_date": "Date", "activity_type": "Activity", "hours_spent": "Hours", "description": "Description"
@@ -473,7 +470,6 @@ elif page == "Team Board":
                         
                         st.divider()
                         
-                        # --- Consolidated Ledger Form ---
                         st.markdown("##### 2. Log Activity Ledger & Escalations")
                         update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
                         update_text = st.text_area("Update Details (Optional but recommended)")
@@ -489,7 +485,6 @@ elif page == "Team Board":
                                 error = True
                             
                             if not error:
-                                # 1. Update Project Status Payload
                                 update_payload = {
                                     "current_stage": new_stage,
                                     "tracking_status": new_tracking
@@ -500,13 +495,12 @@ elif page == "Team Board":
                                 try:
                                     supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
                                     
-                                    # 2. Insert Ledger Entry if text provided or explicitly flagged
                                     if update_text.strip() or flag_principal:
+                                        # UPDATED: Changed key to 'author_id' and 'content' based on schema mapping
                                         new_entry = {
                                             "project_code": actual_proj_code,
-                                            "team_member_id": selected_member_id,
+                                            "author_id": selected_member_id, 
                                             "category": update_category,
-                                            # UPDATED: Using 'content' schema mapping
                                             "content": update_text.strip() if update_text.strip() else "Flagged for intervention.",
                                             "is_principal_action_required": flag_principal,
                                             "action_type": action_type if flag_principal else None
@@ -554,9 +548,13 @@ elif page == "Team Board":
                     elif not log_desc.strip():
                         st.error("Please provide a brief description of the work done.")
                     else:
+                        # UPDATED: Enforce Foreign Key Constraint (Convert INTERNAL to None/NULL)
+                        actual_log_code = log_project_options[log_proj_display]
+                        final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
+
                         log_payload = {
                             "team_member_id": selected_member_id,
-                            "project_code": log_project_options[log_proj_display],
+                            "project_code": final_log_code,
                             "log_date": log_date.isoformat(),
                             "activity_type": log_activity,
                             "hours_spent": total_time,
@@ -594,7 +592,7 @@ elif page == "Team Board":
                             total_logged_hours = df_filtered_logs['hours_spent'].sum()
                             st.metric(label="Total Hours Logged (Selected Period)", value=f"{total_logged_hours:.2f} hrs")
                             
-                            df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if x == "INTERNAL" else f"{x} - {project_map.get(x, 'Unknown')}")
+                            df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
                             df_filtered_logs = df_filtered_logs.rename(columns={
                                 "log_date": "Date", "project_name": "Project", "activity_type": "Activity",
                                 "hours_spent": "Hours", "tags": "Tags", "description": "Description"
