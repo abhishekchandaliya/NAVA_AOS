@@ -15,6 +15,10 @@ if 'selected_project_code' not in st.session_state:
 if 'daily_log_cart' not in st.session_state:
     st.session_state.daily_log_cart = []
 
+# NEW: Dynamic Key Counter for the history dataframe
+if 'grid_key' not in st.session_state: 
+    st.session_state.grid_key = 0
+
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
@@ -726,18 +730,20 @@ elif page == "Team Board":
                                 df_ui = df_display.rename(columns=display_cols_map)
                                 display_log_cols = list(display_cols_map.values())
                                 
+                                current_grid_key = f"history_grid_{st.session_state.grid_key}"
+                                
                                 st.dataframe(
                                     df_ui[display_log_cols], 
                                     use_container_width=True, 
                                     hide_index=True,
                                     selection_mode="single-row",
                                     on_select="rerun",
-                                    key="history_grid"
+                                    key=current_grid_key
                                 )
                                 
-                                # Click-to-Edit Logic
-                                if 'history_grid' in st.session_state and len(st.session_state.history_grid['selection']['rows']) > 0:
-                                    selected_idx = st.session_state.history_grid['selection']['rows'][0]
+                                # Click-to-Edit Logic with dynamic key fix
+                                if current_grid_key in st.session_state and len(st.session_state[current_grid_key]['selection']['rows']) > 0:
+                                    selected_idx = st.session_state[current_grid_key]['selection']['rows'][0]
                                     selected_log = df_display.iloc[selected_idx]
                                     
                                     st.divider()
@@ -783,8 +789,8 @@ elif page == "Team Board":
                                                 try:
                                                     supabase.table("team_logs").update(update_payload).eq("id", selected_log['id']).execute()
                                                     st.success("Log updated successfully!")
-                                                    # --- FIXED: Use full dictionary assignment to clear widget state ---
-                                                    st.session_state['history_grid'] = {'selection': {'rows': [], 'columns': []}}
+                                                    # NEW: Clean increment of the grid key instead of mutating state dict
+                                                    st.session_state.grid_key += 1
                                                     time.sleep(0.5)
                                                     st.rerun()
                                                 except Exception as e:
