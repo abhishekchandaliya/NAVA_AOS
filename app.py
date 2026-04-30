@@ -3,6 +3,7 @@ from supabase import create_client, Client
 from datetime import datetime, timedelta
 import pandas as pd
 import altair as alt
+import time
 
 # --- Page Configuration ---
 st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide")
@@ -161,6 +162,7 @@ if page == "Principal Dashboard":
                                     try:
                                         supabase.table("project_ledger").update(payload).eq("id", row['id']).execute()
                                         st.success("Escalation triaged successfully!")
+                                        time.sleep(0.5)
                                         st.rerun() 
                                     except Exception as e:
                                         st.error(f"Failed to process triage: {e}")
@@ -435,10 +437,12 @@ elif page == "Team Board":
         tasks_response = supabase.table("tasks").select("*").execute()
         projects_response = supabase.table("projects").select("*").execute() 
         logs_response = supabase.table("team_logs").select("*").execute() 
+        ledger_response = supabase.table("project_ledger").select("*").execute()
         
         tasks_data = tasks_response.data
         projects_data = projects_response.data
         logs_data = logs_response.data
+        ledger_data = ledger_response.data
         
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
         
@@ -470,6 +474,7 @@ elif page == "Team Board":
                     try:
                         supabase.table("tasks").update({"status": new_status}).eq("id", task_id_to_update).execute()
                         st.success("Task status updated successfully!")
+                        time.sleep(0.5)
                         st.rerun() 
                     except Exception as e:
                         st.error(f"Failed to update task: {e}")
@@ -487,7 +492,42 @@ elif page == "Team Board":
                 if not allowed_projects:
                     st.info("You are not assigned as the Team Lead for any projects.")
                 else:
-                    st.subheader("Frictionless Project Update")
+                    # --- 1. Team Lead Mini-Dashboard ---
+                    my_active = len([p for p in allowed_projects if p.get('status', '').lower() == 'active'])
+                    my_critical = len([p for p in allowed_projects if p.get('tracking_status', '').lower() == 'critical'])
+                    
+                    st.subheader("Team Lead Command Center")
+                    m_col1, m_col2 = st.columns(2)
+                    m_col1.metric("My Active Projects", my_active)
+                    m_col2.metric("My Critical Projects", my_critical)
+                    st.divider()
+                    
+                    # --- 2. Principal Feedback Inbox ---
+                    allowed_proj_codes = [p['project_code'] for p in allowed_projects]
+                    if ledger_data:
+                        pending_feedback = [l for l in ledger_data if l.get('escalation_status') == 'Pending Lead Action' and l.get('project_code') in allowed_proj_codes]
+                        
+                        if pending_feedback:
+                            with st.expander("📬 Principal Feedback / Action Required", expanded=True):
+                                for idx, fb in enumerate(pending_feedback):
+                                    fb_date = pd.to_datetime(fb['created_at']).strftime('%b %d, %Y')
+                                    fb_proj = fb['project_code']
+                                    fb_text = fb.get('principal_feedback', 'No feedback provided.')
+                                    
+                                    st.markdown(f"**{fb_proj}** | *{fb_date}*")
+                                    st.warning(f"**Principal Says:** {fb_text}")
+                                    
+                                    if st.button("Acknowledge & Clear", key=f"ack_fb_{fb['id']}"):
+                                        try:
+                                            supabase.table("project_ledger").update({"escalation_status": "Resolved"}).eq("id", fb['id']).execute()
+                                            st.toast("Feedback Acknowledged!", icon="✅")
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Failed to clear feedback: {e}")
+                                st.divider()
+                    
+                    # --- 3. Compact Split-Screen Form ---
                     proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
                     selected_proj_to_update = st.selectbox("Select Project to Update", options=list(proj_update_options.keys()))
@@ -508,28 +548,30 @@ elif page == "Team Board":
                     main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
                     
                     with st.form("update_project_form"):
-                        st.markdown("##### 1. Master Status Adjustments")
-                        col_s1, col_s2 = st.columns(2)
-                        with col_s1:
+                        col_left, col_right = st.columns(2)
+                        
+                        with col_left:
+                            st.markdown("##### Project Status")
                             new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
-                        with col_s2:
                             new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
+                            
+                            new_main_status = None
+                            if selected_member_role in ["Principal Architect", "Manager"]:
+                                new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
+                                
+                        with col_right:
+                            st.markdown("##### Log Activity Ledger")
+                            update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
+                            update_text = st.text_area("Update Details", placeholder="Optional but recommended")
+                            
+                            st.markdown("**Principal Escalation**")
+                            flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
+                            action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
                         
-                        new_main_status = None
-                        if selected_member_role in ["Principal Architect", "Manager"]:
-                            new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
+                        # UX Success Loop
+                        submit_update = st.form_submit_button("Submit Combined Update", type="primary", use_container_width=True)
                         
-                        st.divider()
-                        
-                        st.markdown("##### 2. Log Activity Ledger & Escalations")
-                        update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
-                        update_text = st.text_area("Update Details (Optional but recommended)")
-                        
-                        st.markdown("**Principal Escalation**")
-                        flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
-                        action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
-                        
-                        if st.form_submit_button("Submit Combined Update", type="primary"):
+                        if submit_update:
                             error = False
                             if flag_principal and action_type == "None":
                                 st.error("Please select an Action Type when flagging for the Principal.")
@@ -558,7 +600,8 @@ elif page == "Team Board":
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
-                                    st.success(f"Project {actual_proj_code} updated and ledger entry recorded successfully!")
+                                    st.toast("Project Updated & Logged Successfully!", icon="✅")
+                                    time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Failed to update project data: {e}")
@@ -567,7 +610,6 @@ elif page == "Team Board":
         with tab3:
             col_form, col_history = st.columns([1, 1.5])
             
-            # --- LEFT COLUMN (Form) ---
             with col_form:
                 st.subheader("Submit Daily Log")
                 log_project_options = {"Internal/No Project": "INTERNAL"}
@@ -582,10 +624,10 @@ elif page == "Team Board":
                         global_activity_types = ['Drawing', 'Admin']
                     log_activity = st.selectbox("Activity Type", options=global_activity_types)
                     
-                    col_start, col_end = st.columns(2)
-                    with col_start:
+                    col_h, col_m = st.columns(2)
+                    with col_h:
                         start_time = st.time_input("Start Time", value=datetime.now().replace(hour=9, minute=0, second=0))
-                    with col_end:
+                    with col_m:
                         end_time = st.time_input("End Time", value=datetime.now().replace(hour=17, minute=0, second=0))
                     
                     if not global_tags:
@@ -627,7 +669,6 @@ elif page == "Team Board":
                             except Exception as e:
                                 st.error(f"Failed to submit log: {e}")
                 
-                # Inline Tag Generation
                 with st.expander("➕ Add New Tag"):
                     with st.form("new_tag_form", clear_on_submit=True):
                         new_inline_tag = st.text_input("New Tag Name", placeholder="e.g., Urgent Approval")
@@ -641,7 +682,6 @@ elif page == "Team Board":
                                 except Exception as e:
                                     st.error(f"Failed to add tag: {e}")
 
-            # --- RIGHT COLUMN (History & Analytics) ---
             with col_history:
                 st.subheader("My Timesheet History")
                 
@@ -679,7 +719,6 @@ elif page == "Team Board":
                         else:
                             st.info("You haven't submitted any timesheet logs yet.")
                             
-                        # Manage Recent Logs (Delete)
                         st.divider()
                         st.subheader("Manage Recent Logs")
                         recent_logs = [log for log in my_logs if (today - pd.to_datetime(log['log_date']).date()).days <= 7]
