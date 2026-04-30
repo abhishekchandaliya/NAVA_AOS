@@ -14,7 +14,7 @@ if 'selected_project_code' not in st.session_state:
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
-def open_cockpit(project_code):
+def open_hub(project_code):
     st.session_state.selected_project_code = project_code
 
 # --- Database Connection ---
@@ -68,7 +68,7 @@ if selected_member_role in ["Principal Architect", "Manager"]:
 page = st.sidebar.radio("Go to", nav_pages)
 
 # ==========================================
-# PAGE 1: PRINCIPAL DASHBOARD & COCKPIT
+# PAGE 1: PRINCIPAL DASHBOARD & PROJECT HUB
 # ==========================================
 if page == "Principal Dashboard":
     
@@ -86,7 +86,7 @@ if page == "Principal Dashboard":
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
 
         # ---------------------------------------------------------
-        # STATE 1: PROJECT COCKPIT (DRILL-DOWN VIEW)
+        # STATE 1: PROJECT HUB (DRILL-DOWN VIEW)
         # ---------------------------------------------------------
         if st.session_state.selected_project_code:
             st.button("⬅️ Back to Main Dashboard", on_click=go_to_dashboard)
@@ -96,7 +96,7 @@ if page == "Principal Dashboard":
             
             if proj_details:
                 lead_name = id_to_name_map.get(proj_details.get('team_lead'), "Unassigned")
-                st.title(f"🚀 Project Cockpit: {target_code}")
+                st.title(f"🚀 Project Hub: {target_code}")
                 st.markdown(f"**{proj_details.get('project_name', 'Unnamed')}** | Lead: *{lead_name}* | Stage: *{proj_details.get('current_stage', 'N/A')}*")
                 st.divider()
                 
@@ -123,33 +123,47 @@ if page == "Principal Dashboard":
                     
                 st.divider()
 
-                # --- NEW: Active Escalations Section ---
+                # --- Active Escalations & Executive Triage ---
                 st.subheader("🚨 Active Escalations")
                 if not df_ledger.empty and 'project_code' in df_ledger.columns:
-                    # Filter for active escalations specific to this project
                     active_escalations = df_ledger[(df_ledger['project_code'] == target_code) & (df_ledger['is_principal_action_required'] == True)].copy()
                     
                     if not active_escalations.empty:
                         for idx, row in active_escalations.sort_values('created_at', ascending=False).iterrows():
-                            with st.container():
-                                date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
-                                c1, c2 = st.columns([4, 1])
+                            date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
+                            req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
+                            
+                            with st.form(key=f"triage_form_{row.get('id', idx)}"):
+                                st.markdown(f"**{row.get('category', 'Uncategorized')}** | *{date_str}* | Requested by: *{req_by}*")
+                                st.markdown(f"**Action:** {row.get('action_type', 'N/A')} | **Details:** {row.get('content', '')}")
+                                st.divider()
                                 
-                                with c1:
-                                    st.markdown(f"**{row['category']}** | *{date_str}*")
-                                    st.markdown(f"**Action Required:** {row.get('action_type', 'N/A')} | **Details:** {row.get('content', '')}")
+                                decision = st.radio("Executive Decision", options=[
+                                    "🟢 Resolve & Close", 
+                                    "🟠 Return to Team Lead (Needs Action)", 
+                                    "🔵 Schedule / Follow-up"
+                                ])
+                                feedback = st.text_area("Principal Instructions / Feedback", placeholder="Enter specific directives for the team...")
                                 
-                                with c2:
-                                    # Unique key using ledger ID ensures Streamlit buttons don't conflict
-                                    if st.button("✅ Mark as Resolved", key=f"resolve_esc_{row.get('id', idx)}", type="primary"):
-                                        try:
-                                            # Execute Supabase update
-                                            supabase.table("project_ledger").update({"is_principal_action_required": False}).eq("id", row['id']).execute()
-                                            st.success("Escalation resolved!")
-                                            st.rerun() # Immediately refresh to remove from list
-                                        except Exception as e:
-                                            st.error(f"Failed to resolve escalation: {e}")
-                            st.write("---")
+                                if st.form_submit_button("Submit Triage Decision", type="primary"):
+                                    payload = {"principal_feedback": feedback.strip()}
+                                    
+                                    if decision == "🟢 Resolve & Close":
+                                        payload["is_principal_action_required"] = False
+                                        payload["escalation_status"] = "Resolved"
+                                    elif decision == "🟠 Return to Team Lead (Needs Action)":
+                                        payload["is_principal_action_required"] = False
+                                        payload["escalation_status"] = "Pending Lead Action"
+                                    elif decision == "🔵 Schedule / Follow-up":
+                                        payload["is_principal_action_required"] = True
+                                        payload["escalation_status"] = "Scheduled"
+                                        
+                                    try:
+                                        supabase.table("project_ledger").update(payload).eq("id", row['id']).execute()
+                                        st.success("Escalation triaged successfully!")
+                                        st.rerun() 
+                                    except Exception as e:
+                                        st.error(f"Failed to process triage: {e}")
                     else:
                         st.success("No active escalations for this project.")
                 else:
@@ -162,10 +176,12 @@ if page == "Principal Dashboard":
                 if not df_ledger.empty and not proj_ledger.empty:
                     display_ledger = proj_ledger.copy()
                     display_ledger['Team Member'] = display_ledger['author_id'].map(lambda x: id_to_name_map.get(x, "Unknown"))
+                    display_ledger = display_ledger.rename(columns={
+                        "created_at": "Date", "category": "Category", "content": "Details", 
+                        "action_type": "Action Required", "escalation_status": "Status", "principal_feedback": "Principal Feedback"
+                    })
                     
-                    display_ledger = display_ledger.rename(columns={"created_at": "Date", "category": "Category", "content": "Details", "action_type": "Action Required"})
-                    
-                    view_cols = ["Date", "Category", "Team Member", "Details", "Action Required"]
+                    view_cols = ["Date", "Category", "Team Member", "Details", "Action Required", "Status", "Principal Feedback"]
                     view_cols = [c for c in view_cols if c in display_ledger.columns]
                     st.dataframe(display_ledger[view_cols].sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
                 else:
@@ -180,7 +196,7 @@ if page == "Principal Dashboard":
         else:
             st.title("Principal Dashboard")
             
-            # --- Principal Action Center (One-Click Resolution) ---
+            # --- Principal Action Center (Grouped Inbox) ---
             df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
             if not df_ledger.empty and 'is_principal_action_required' in df_ledger.columns:
                 action_req_df = df_ledger[df_ledger['is_principal_action_required'] == True].copy()
@@ -188,24 +204,26 @@ if page == "Principal Dashboard":
                 if not action_req_df.empty:
                     st.error("### 🔴 Principal Intervention Required")
                     
-                    for idx, row in action_req_df.sort_values('created_at', ascending=False).iterrows():
-                        proj_code = row['project_code']
-                        proj_name = project_map.get(proj_code, 'Unknown')
-                        req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
-                        action = row.get('action_type', 'Action Required')
-                        date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
-                        details = row.get('content', '') 
-                        
-                        with st.container():
-                            c1, c2, c3 = st.columns([4, 2, 1])
-                            with c1:
-                                st.markdown(f"**{proj_code} - {proj_name}** | *{date_str}*")
-                                st.markdown(f"**Reason:** {action} | **Details:** {details}")
-                            with c2:
-                                st.markdown(f"**Requested by:** {req_by}")
-                            with c3:
-                                st.button("View Cockpit", key=f"flag_{row.get('id', idx)}", on_click=open_cockpit, args=(proj_code,), type="primary")
-                            st.write("---")
+                    # Fill NaN action types so groupby doesn't drop them
+                    action_req_df['action_type'] = action_req_df['action_type'].fillna('Uncategorized')
+                    grouped_escalations = action_req_df.groupby('action_type')
+                    
+                    for action_type, group in grouped_escalations:
+                        with st.expander(f"📌 {action_type} ({len(group)} Pending Actions)", expanded=True):
+                            for idx, row in group.sort_values('created_at', ascending=False).iterrows():
+                                proj_code = row['project_code']
+                                proj_name = project_map.get(proj_code, 'Unknown')
+                                req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
+                                date_str = pd.to_datetime(row['created_at']).strftime('%b %d, %Y')
+                                
+                                c1, c2, c3 = st.columns([5, 3, 2])
+                                with c1:
+                                    st.markdown(f"**{proj_code} - {proj_name}** | {date_str}")
+                                with c2:
+                                    st.markdown(f"Lead: **{req_by}**")
+                                with c3:
+                                    st.button("View Hub", key=f"flag_hub_{row.get('id', idx)}", on_click=open_hub, args=(proj_code,), type="primary", use_container_width=True)
+                                st.write("---")
             
             if projects_data:
                 dash_tab1, dash_tab2, dash_tab3 = st.tabs(["⚠️ Portfolio Health", "📊 Resource Allocation", "🗂️ Master Directory"])
@@ -290,14 +308,14 @@ if page == "Principal Dashboard":
                 with dash_tab3:
                     st.subheader("Project Master Directory")
                     
-                    st.markdown("##### 🚀 Access Project Cockpit")
-                    cockpit_col1, cockpit_col2 = st.columns([3, 1])
-                    with cockpit_col1:
+                    st.markdown("##### 🚀 Access Project Hub")
+                    hub_col1, hub_col2 = st.columns([3, 1])
+                    with hub_col1:
                         proj_list = [f"{row['project_code']} - {row['project_name']}" for _, row in df_projects.iterrows()]
-                        selected_for_cockpit = st.selectbox("Select Project to View Cockpit", options=proj_list, label_visibility="collapsed")
-                    with cockpit_col2:
-                        if st.button("View Cockpit", type="primary", use_container_width=True):
-                            code_only = selected_for_cockpit.split(" - ")[0]
+                        selected_for_hub = st.selectbox("Select Project to View Hub", options=proj_list, label_visibility="collapsed")
+                    with hub_col2:
+                        if st.button("View Hub", type="primary", use_container_width=True):
+                            code_only = selected_for_hub.split(" - ")[0]
                             st.session_state.selected_project_code = code_only
                             st.rerun()
 
@@ -536,7 +554,8 @@ elif page == "Team Board":
                                             "category": update_category,
                                             "content": update_text.strip() if update_text.strip() else "Flagged for intervention.",
                                             "is_principal_action_required": flag_principal,
-                                            "action_type": action_type if flag_principal else None
+                                            "action_type": action_type if flag_principal else None,
+                                            "escalation_status": "Pending" if flag_principal else None
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
