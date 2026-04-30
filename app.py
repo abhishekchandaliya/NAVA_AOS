@@ -601,18 +601,15 @@ elif page == "Team Board":
         with tab3:
             col_form, col_history = st.columns([1, 1.5])
             
-            # --- LEFT COLUMN: Queue Activity & Cart ---
             with col_form:
                 st.subheader("Queue Activity")
                 log_project_options = {"Internal/No Project": "INTERNAL"}
                 if projects_data:
                     log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
                 
-                # Using standard inputs instead of st.form to allow the inline tag button to work seamlessly
                 log_date = st.date_input("Date", value=datetime.today())
                 log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
                 
-                # EXACT ACTIVITY LIST from instructions
                 activity_choices = ['Drawing', 'Design Concept & Discussion', '3D Modelling', '3D Renders', 'Site Visit', 'Internal Review', 'Client Meeting', 'Site Coordination', 'Vendor Coordination', 'Admin', 'R & D', 'Others']
                 log_activity = st.selectbox("Activity Type", options=activity_choices)
                 
@@ -625,7 +622,7 @@ elif page == "Team Board":
                 col_tags, col_new_tag = st.columns([3, 1])
                 with col_tags:
                     if not global_tags:
-                        global_tags = ['Concept', 'GFC', 'Revisions', 'Approval', 'BOQ']
+                        global_tags = ['Concept', 'GFC', 'Revisions', 'Approval', 'BOQ', 'Tender', 'Presentation', 'As-Built']
                     log_tags = st.multiselect("Tags", options=global_tags)
                     
                 with col_new_tag:
@@ -657,7 +654,6 @@ elif page == "Team Board":
                         actual_log_code = log_project_options[log_proj_display]
                         final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
 
-                        # Append to Session State Cart
                         st.session_state.daily_log_cart.append({
                             "team_member_id": selected_member_id,
                             "project_code": final_log_code,
@@ -668,7 +664,7 @@ elif page == "Team Board":
                             "hours_spent": total_time,
                             "description": log_desc,
                             "tags": log_tags,
-                            "_display_proj": log_proj_display # For UI readability in the cart
+                            "_display_proj": log_proj_display 
                         })
                         st.rerun()
 
@@ -682,7 +678,7 @@ elif page == "Team Board":
                         payloads = []
                         for item in st.session_state.daily_log_cart:
                             payload = item.copy()
-                            del payload["_display_proj"] # Clean up helper key
+                            del payload["_display_proj"] 
                             payloads.append(payload)
                             
                         try:
@@ -696,7 +692,6 @@ elif page == "Team Board":
                 else:
                     st.info("Your timesheet cart is empty.")
 
-            # --- RIGHT COLUMN: History & Edits ---
             with col_history:
                 st.subheader("My Timesheet History")
                 
@@ -722,7 +717,6 @@ elif page == "Team Board":
                                 
                                 df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
                                 
-                                # We must sort and re-index BEFORE passing to st.dataframe so the on_select indices map perfectly
                                 df_display = df_filtered_logs.sort_values(by="log_date", ascending=False).reset_index(drop=True)
                                 
                                 display_cols_map = {
@@ -789,8 +783,8 @@ elif page == "Team Board":
                                                 try:
                                                     supabase.table("team_logs").update(update_payload).eq("id", selected_log['id']).execute()
                                                     st.success("Log updated successfully!")
-                                                    # Clear selection
-                                                    st.session_state.history_grid['selection']['rows'] = []
+                                                    # --- FIXED: Use full dictionary assignment to clear widget state ---
+                                                    st.session_state['history_grid'] = {'selection': {'rows': [], 'columns': []}}
                                                     time.sleep(0.5)
                                                     st.rerun()
                                                 except Exception as e:
