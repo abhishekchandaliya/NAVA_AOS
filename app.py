@@ -12,6 +12,9 @@ st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide
 if 'selected_project_code' not in st.session_state:
     st.session_state.selected_project_code = None
 
+if 'daily_log_cart' not in st.session_state:
+    st.session_state.daily_log_cart = []
+
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
@@ -101,7 +104,6 @@ if page == "Principal Dashboard":
                 st.markdown(f"**{proj_details.get('project_name', 'Unnamed')}** | Lead: *{lead_name}* | Stage: *{proj_details.get('current_stage', 'N/A')}*")
                 st.divider()
                 
-                # --- Proactive Summary (Critical Path) ---
                 st.subheader("Critical Path Summary")
                 df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
                 
@@ -124,7 +126,6 @@ if page == "Principal Dashboard":
                     
                 st.divider()
 
-                # --- Active Escalations & Executive Triage ---
                 st.subheader("🚨 Active Escalations")
                 if not df_ledger.empty and 'project_code' in df_ledger.columns:
                     active_escalations = df_ledger[(df_ledger['project_code'] == target_code) & (df_ledger['is_principal_action_required'] == True)].copy()
@@ -173,7 +174,6 @@ if page == "Principal Dashboard":
 
                 st.divider()
                 
-                # --- Full Width Ledger ---
                 st.subheader("Activity Ledger")
                 if not df_ledger.empty and not proj_ledger.empty:
                     display_ledger = proj_ledger.copy()
@@ -198,7 +198,6 @@ if page == "Principal Dashboard":
         else:
             st.title("Principal Dashboard")
             
-            # --- Principal Action Center (Grouped Inbox) ---
             df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
             if not df_ledger.empty and 'is_principal_action_required' in df_ledger.columns:
                 action_req_df = df_ledger[df_ledger['is_principal_action_required'] == True].copy()
@@ -233,7 +232,6 @@ if page == "Principal Dashboard":
                 if "team_lead" in df_projects.columns:
                     df_projects["team_lead_name"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
 
-                # --- TAB 1: PORTFOLIO HEALTH ---
                 with dash_tab1:
                     total_projects = len(projects_data)
                     active_projects = len([p for p in projects_data if p.get('status', '').lower() == 'active'])
@@ -262,7 +260,6 @@ if page == "Principal Dashboard":
                     else:
                         st.success("All projects are currently on track! No critical actions required.")
 
-                # --- TAB 2: RESOURCE ALLOCATION ---
                 with dash_tab2:
                     if logs_data:
                         df_logs = pd.DataFrame(logs_data)
@@ -305,7 +302,6 @@ if page == "Principal Dashboard":
                     else:
                         st.info("No timesheet logs found in the database yet.")
 
-                # --- TAB 3: MASTER DIRECTORY ---
                 with dash_tab3:
                     st.subheader("Project Master Directory")
                     
@@ -474,7 +470,6 @@ elif page == "Team Board":
                     try:
                         supabase.table("tasks").update({"status": new_status}).eq("id", task_id_to_update).execute()
                         st.success("Task status updated successfully!")
-                        time.sleep(0.5)
                         st.rerun() 
                     except Exception as e:
                         st.error(f"Failed to update task: {e}")
@@ -492,7 +487,6 @@ elif page == "Team Board":
                 if not allowed_projects:
                     st.info("You are not assigned as the Team Lead for any projects.")
                 else:
-                    # --- 1. Team Lead Mini-Dashboard ---
                     my_active = len([p for p in allowed_projects if p.get('status', '').lower() == 'active'])
                     my_critical = len([p for p in allowed_projects if p.get('tracking_status', '').lower() == 'critical'])
                     
@@ -502,7 +496,6 @@ elif page == "Team Board":
                     m_col2.metric("My Critical Projects", my_critical)
                     st.divider()
                     
-                    # --- 2. Principal Feedback Inbox ---
                     allowed_proj_codes = [p['project_code'] for p in allowed_projects]
                     if ledger_data:
                         pending_feedback = [l for l in ledger_data if l.get('escalation_status') == 'Pending Lead Action' and l.get('project_code') in allowed_proj_codes]
@@ -527,7 +520,6 @@ elif page == "Team Board":
                                             st.error(f"Failed to clear feedback: {e}")
                                 st.divider()
                     
-                    # --- 3. Compact Split-Screen Form ---
                     proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in allowed_projects}
                     
                     selected_proj_to_update = st.selectbox("Select Project to Update", options=list(proj_update_options.keys()))
@@ -568,7 +560,6 @@ elif page == "Team Board":
                             flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
                             action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
                         
-                        # UX Success Loop
                         submit_update = st.form_submit_button("Submit Combined Update", type="primary", use_container_width=True)
                         
                         if submit_update:
@@ -610,78 +601,102 @@ elif page == "Team Board":
         with tab3:
             col_form, col_history = st.columns([1, 1.5])
             
+            # --- LEFT COLUMN: Queue Activity & Cart ---
             with col_form:
-                st.subheader("Submit Daily Log")
+                st.subheader("Queue Activity")
                 log_project_options = {"Internal/No Project": "INTERNAL"}
                 if projects_data:
                     log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
                 
-                with st.form("daily_log_form", clear_on_submit=True):
-                    log_date = st.date_input("Date", value=datetime.today())
-                    log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
-                    
-                    if not global_activity_types:
-                        global_activity_types = ['Drawing', 'Admin']
-                    log_activity = st.selectbox("Activity Type", options=global_activity_types)
-                    
-                    col_h, col_m = st.columns(2)
-                    with col_h:
-                        start_time = st.time_input("Start Time", value=datetime.now().replace(hour=9, minute=0, second=0))
-                    with col_m:
-                        end_time = st.time_input("End Time", value=datetime.now().replace(hour=17, minute=0, second=0))
-                    
+                # Using standard inputs instead of st.form to allow the inline tag button to work seamlessly
+                log_date = st.date_input("Date", value=datetime.today())
+                log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
+                
+                # EXACT ACTIVITY LIST from instructions
+                activity_choices = ['Drawing', 'Design Concept & Discussion', '3D Modelling', '3D Renders', 'Site Visit', 'Internal Review', 'Client Meeting', 'Site Coordination', 'Vendor Coordination', 'Admin', 'R & D', 'Others']
+                log_activity = st.selectbox("Activity Type", options=activity_choices)
+                
+                col_start, col_end = st.columns(2)
+                with col_start:
+                    start_time = st.time_input("Start Time", value=datetime.now().replace(hour=9, minute=0, second=0))
+                with col_end:
+                    end_time = st.time_input("End Time", value=datetime.now().replace(hour=17, minute=0, second=0))
+                
+                col_tags, col_new_tag = st.columns([3, 1])
+                with col_tags:
                     if not global_tags:
-                        global_tags = ['Concept', 'Other']
+                        global_tags = ['Concept', 'GFC', 'Revisions', 'Approval', 'BOQ']
                     log_tags = st.multiselect("Tags", options=global_tags)
                     
-                    log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
-                    
-                    if st.form_submit_button("Submit Log", type="primary"):
-                        s_dt = datetime.combine(log_date, start_time)
-                        e_dt = datetime.combine(log_date, end_time)
-                        if e_dt < s_dt:
-                            e_dt += timedelta(days=1)
-                        total_time = (e_dt - s_dt).total_seconds() / 3600.0
-                        
-                        if total_time <= 0:
-                            st.error("Please ensure the End Time is after the Start Time.")
-                        elif not log_desc.strip():
-                            st.error("Please provide a brief description of the work done.")
-                        else:
-                            actual_log_code = log_project_options[log_proj_display]
-                            final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
-
-                            log_payload = {
-                                "team_member_id": selected_member_id,
-                                "project_code": final_log_code,
-                                "log_date": log_date.isoformat(),
-                                "activity_type": log_activity,
-                                "start_time": start_time.strftime("%H:%M:%S"),
-                                "end_time": end_time.strftime("%H:%M:%S"),
-                                "hours_spent": total_time,
-                                "description": log_desc,
-                                "tags": log_tags
-                            }
+                with col_new_tag:
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    new_inline_tag = st.text_input("New Tag", placeholder="Tag Name", label_visibility="collapsed")
+                    if st.button("➕", use_container_width=True):
+                        if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
+                            updated_tags = global_tags + [new_inline_tag.strip()]
                             try:
-                                supabase.table("team_logs").insert(log_payload).execute()
-                                st.success(f"Log submitted successfully for {total_time:.2f} hours!")
-                                st.rerun() 
+                                supabase.table("aos_settings").update({"options": updated_tags}).eq("category", "tags").execute()
+                                st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to submit log: {e}")
+                                st.error(f"Failed to add tag: {e}")
                 
-                with st.expander("➕ Add New Tag"):
-                    with st.form("new_tag_form", clear_on_submit=True):
-                        new_inline_tag = st.text_input("New Tag Name", placeholder="e.g., Urgent Approval")
-                        if st.form_submit_button("Add Tag"):
-                            if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
-                                updated_tags = global_tags + [new_inline_tag.strip()]
-                                try:
-                                    supabase.table("aos_settings").update({"options": updated_tags}).eq("category", "tags").execute()
-                                    st.success(f"Tag '{new_inline_tag.strip()}' added!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to add tag: {e}")
+                log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
+                
+                if st.button("Add to Today's Timesheet", type="primary", use_container_width=True):
+                    s_dt = datetime.combine(log_date, start_time)
+                    e_dt = datetime.combine(log_date, end_time)
+                    if e_dt < s_dt:
+                        e_dt += timedelta(days=1)
+                    total_time = (e_dt - s_dt).total_seconds() / 3600.0
+                    
+                    if total_time <= 0:
+                        st.error("Please ensure the End Time is after the Start Time.")
+                    elif not log_desc.strip():
+                        st.error("Please provide a brief description of the work done.")
+                    else:
+                        actual_log_code = log_project_options[log_proj_display]
+                        final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
 
+                        # Append to Session State Cart
+                        st.session_state.daily_log_cart.append({
+                            "team_member_id": selected_member_id,
+                            "project_code": final_log_code,
+                            "log_date": log_date.isoformat(),
+                            "activity_type": log_activity,
+                            "start_time": start_time.strftime("%H:%M:%S"),
+                            "end_time": end_time.strftime("%H:%M:%S"),
+                            "hours_spent": total_time,
+                            "description": log_desc,
+                            "tags": log_tags,
+                            "_display_proj": log_proj_display # For UI readability in the cart
+                        })
+                        st.rerun()
+
+                st.divider()
+                st.markdown("**Timesheet Cart**")
+                if st.session_state.daily_log_cart:
+                    cart_df = pd.DataFrame(st.session_state.daily_log_cart)
+                    st.dataframe(cart_df[["log_date", "_display_proj", "activity_type", "hours_spent", "description"]], use_container_width=True)
+                    
+                    if st.button("🚀 Submit Entire Day to Database", type="primary", use_container_width=True):
+                        payloads = []
+                        for item in st.session_state.daily_log_cart:
+                            payload = item.copy()
+                            del payload["_display_proj"] # Clean up helper key
+                            payloads.append(payload)
+                            
+                        try:
+                            supabase.table("team_logs").insert(payloads).execute()
+                            st.session_state.daily_log_cart = []
+                            st.success("All logs submitted successfully!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to submit batch: {e}")
+                else:
+                    st.info("Your timesheet cart is empty.")
+
+            # --- RIGHT COLUMN: History & Edits ---
             with col_history:
                 st.subheader("My Timesheet History")
                 
@@ -706,41 +721,85 @@ elif page == "Team Board":
                                 st.metric(label="Total Hours Logged (Selected Period)", value=f"{total_logged_hours:.2f} hrs")
                                 
                                 df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
-                                df_filtered_logs = df_filtered_logs.rename(columns={
+                                
+                                # We must sort and re-index BEFORE passing to st.dataframe so the on_select indices map perfectly
+                                df_display = df_filtered_logs.sort_values(by="log_date", ascending=False).reset_index(drop=True)
+                                
+                                display_cols_map = {
                                     "log_date": "Date", "project_name": "Project", "activity_type": "Activity",
                                     "hours_spent": "Hours", "tags": "Tags", "description": "Description"
-                                })
+                                }
+                                df_ui = df_display.rename(columns=display_cols_map)
+                                display_log_cols = list(display_cols_map.values())
                                 
-                                display_log_cols = ["Date", "Project", "Activity", "Hours", "Tags", "Description"]
-                                existing_log_cols = [c for c in display_log_cols if c in df_filtered_logs.columns]
-                                st.dataframe(df_filtered_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+                                st.dataframe(
+                                    df_ui[display_log_cols], 
+                                    use_container_width=True, 
+                                    hide_index=True,
+                                    selection_mode="single-row",
+                                    on_select="rerun",
+                                    key="history_grid"
+                                )
+                                
+                                # Click-to-Edit Logic
+                                if 'history_grid' in st.session_state and len(st.session_state.history_grid['selection']['rows']) > 0:
+                                    selected_idx = st.session_state.history_grid['selection']['rows'][0]
+                                    selected_log = df_display.iloc[selected_idx]
+                                    
+                                    st.divider()
+                                    st.subheader("✏️ Edit Selected Log")
+                                    
+                                    with st.form("edit_log_form"):
+                                        st.markdown(f"**Project:** {selected_log['project_name']} | **Date:** {selected_log['log_date']}")
+                                        
+                                        edit_activity = st.selectbox("Activity Type", options=activity_choices, index=activity_choices.index(selected_log['activity_type']) if selected_log['activity_type'] in activity_choices else 0)
+                                        
+                                        try:
+                                            st_time_obj = datetime.strptime(selected_log.get('start_time', "09:00:00"), "%H:%M:%S").time()
+                                            en_time_obj = datetime.strptime(selected_log.get('end_time', "17:00:00"), "%H:%M:%S").time()
+                                        except:
+                                            st_time_obj = datetime.now().replace(hour=9, minute=0, second=0).time()
+                                            en_time_obj = datetime.now().replace(hour=17, minute=0, second=0).time()
+                                            
+                                        ecol_s, ecol_e = st.columns(2)
+                                        with ecol_s:
+                                            edit_start = st.time_input("Start Time", value=st_time_obj, key="edit_st")
+                                        with ecol_e:
+                                            edit_end = st.time_input("End Time", value=en_time_obj, key="edit_en")
+                                            
+                                        edit_desc = st.text_area("Description", value=selected_log['description'])
+                                        
+                                        if st.form_submit_button("Save Changes", type="primary"):
+                                            s_dt = datetime.combine(selected_log['log_date'], edit_start)
+                                            e_dt = datetime.combine(selected_log['log_date'], edit_end)
+                                            if e_dt < s_dt:
+                                                e_dt += timedelta(days=1)
+                                            total_edit_time = (e_dt - s_dt).total_seconds() / 3600.0
+                                            
+                                            if total_edit_time <= 0:
+                                                st.error("Please ensure the End Time is after the Start Time.")
+                                            else:
+                                                update_payload = {
+                                                    "activity_type": edit_activity,
+                                                    "start_time": edit_start.strftime("%H:%M:%S"),
+                                                    "end_time": edit_end.strftime("%H:%M:%S"),
+                                                    "hours_spent": total_edit_time,
+                                                    "description": edit_desc
+                                                }
+                                                try:
+                                                    supabase.table("team_logs").update(update_payload).eq("id", selected_log['id']).execute()
+                                                    st.success("Log updated successfully!")
+                                                    # Clear selection
+                                                    st.session_state.history_grid['selection']['rows'] = []
+                                                    time.sleep(0.5)
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Failed to update log: {e}")
+
                             else:
                                 st.info("No logs found for the selected date range.")
                         else:
                             st.info("You haven't submitted any timesheet logs yet.")
-                            
-                        st.divider()
-                        st.subheader("Manage Recent Logs")
-                        recent_logs = [log for log in my_logs if (today - pd.to_datetime(log['log_date']).date()).days <= 7]
-                        
-                        if recent_logs:
-                            log_del_options = {}
-                            for log in recent_logs:
-                                proj_display = project_map.get(log.get('project_code'), 'Internal') if log.get('project_code') else 'Internal'
-                                label = f"{log['log_date']} - {proj_display} - {log.get('hours_spent', 0):.2f} hrs"
-                                log_del_options[label] = log['id']
-                                
-                            selected_log_to_delete = st.selectbox("Select Log to Delete (Last 7 Days)", options=list(log_del_options.keys()))
-                            
-                            if st.button("🗑️ Delete Selected Log", type="primary"):
-                                try:
-                                    supabase.table("team_logs").delete().eq("id", log_del_options[selected_log_to_delete]).execute()
-                                    st.success("Log deleted successfully!")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to delete log: {e}")
-                        else:
-                            st.write("No logs recorded in the last 7 days available for deletion.")
                 else:
                     st.warning("Please select a valid start and end date to view history.")
 
