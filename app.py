@@ -204,7 +204,6 @@ if page == "Principal Dashboard":
                 if not action_req_df.empty:
                     st.error("### 🔴 Principal Intervention Required")
                     
-                    # Fill NaN action types so groupby doesn't drop them
                     action_req_df['action_type'] = action_req_df['action_type'].fillna('Uncategorized')
                     grouped_escalations = action_req_df.groupby('action_type')
                     
@@ -566,98 +565,145 @@ elif page == "Team Board":
 
         # === TAB 3: TIME TRACKER & ANALYTICS ===
         with tab3:
-            st.subheader("Submit Daily Log")
+            col_form, col_history = st.columns([1, 1.5])
             
-            log_project_options = {"Internal/No Project": "INTERNAL"}
-            if projects_data:
-                log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
-            
-            with st.form("daily_log_form", clear_on_submit=True):
-                log_date = st.date_input("Date", value=datetime.today())
-                log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
+            # --- LEFT COLUMN (Form) ---
+            with col_form:
+                st.subheader("Submit Daily Log")
+                log_project_options = {"Internal/No Project": "INTERNAL"}
+                if projects_data:
+                    log_project_options.update({f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data})
                 
-                if not global_activity_types:
-                    global_activity_types = ['Drawing', 'Admin']
-                log_activity = st.selectbox("Activity Type", options=global_activity_types)
-                
-                col_h, col_m = st.columns(2)
-                with col_h:
-                    hours_input = st.selectbox("Hours", options=list(range(13)), index=1)
-                with col_m:
-                    minutes_input = st.selectbox("Minutes", options=[0, 15, 30, 45], index=0)
-                
-                if not global_tags:
-                    global_tags = ['Concept', 'Other']
-                log_tags = st.multiselect("Tags", options=global_tags)
-                
-                log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
-                
-                if st.form_submit_button("Submit Log", type="primary"):
-                    total_time = hours_input + (minutes_input / 60.0)
+                with st.form("daily_log_form", clear_on_submit=True):
+                    log_date = st.date_input("Date", value=datetime.today())
+                    log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
                     
-                    if total_time == 0:
-                        st.error("Please log a valid time greater than 0.")
-                    elif not log_desc.strip():
-                        st.error("Please provide a brief description of the work done.")
-                    else:
-                        actual_log_code = log_project_options[log_proj_display]
-                        final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
-
-                        log_payload = {
-                            "team_member_id": selected_member_id,
-                            "project_code": final_log_code,
-                            "log_date": log_date.isoformat(),
-                            "activity_type": log_activity,
-                            "hours_spent": total_time,
-                            "description": log_desc,
-                            "tags": log_tags
-                        }
-                        try:
-                            supabase.table("team_logs").insert(log_payload).execute()
-                            st.success(f"Log submitted successfully for {total_time:.2f} hours!")
-                            st.rerun() 
-                        except Exception as e:
-                            st.error(f"Failed to submit log: {e}")
-
-            # --- My Timesheet History ---
-            st.divider()
-            st.subheader("My Timesheet History")
-            
-            today = datetime.today().date()
-            default_start = today - timedelta(days=7)
-            date_range = st.date_input("Select Date Range", value=(default_start, today))
-            
-            if isinstance(date_range, tuple) and len(date_range) == 2:
-                start_date, end_date = date_range
-                
-                if logs_data:
-                    my_logs = [log for log in logs_data if log.get('team_member_id') == selected_member_id]
-                    if my_logs:
-                        df_my_logs = pd.DataFrame(my_logs)
-                        df_my_logs['log_date'] = pd.to_datetime(df_my_logs['log_date']).dt.date
+                    if not global_activity_types:
+                        global_activity_types = ['Drawing', 'Admin']
+                    log_activity = st.selectbox("Activity Type", options=global_activity_types)
+                    
+                    col_start, col_end = st.columns(2)
+                    with col_start:
+                        start_time = st.time_input("Start Time", value=datetime.now().replace(hour=9, minute=0, second=0))
+                    with col_end:
+                        end_time = st.time_input("End Time", value=datetime.now().replace(hour=17, minute=0, second=0))
+                    
+                    if not global_tags:
+                        global_tags = ['Concept', 'Other']
+                    log_tags = st.multiselect("Tags", options=global_tags)
+                    
+                    log_desc = st.text_area("Brief Description", placeholder="e.g., Modeled the ground floor structural layout...")
+                    
+                    if st.form_submit_button("Submit Log", type="primary"):
+                        s_dt = datetime.combine(log_date, start_time)
+                        e_dt = datetime.combine(log_date, end_time)
+                        if e_dt < s_dt:
+                            e_dt += timedelta(days=1)
+                        total_time = (e_dt - s_dt).total_seconds() / 3600.0
                         
-                        mask = (df_my_logs['log_date'] >= start_date) & (df_my_logs['log_date'] <= end_date)
-                        df_filtered_logs = df_my_logs.loc[mask].copy()
-                        
-                        if not df_filtered_logs.empty:
-                            total_logged_hours = df_filtered_logs['hours_spent'].sum()
-                            st.metric(label="Total Hours Logged (Selected Period)", value=f"{total_logged_hours:.2f} hrs")
-                            
-                            df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
-                            df_filtered_logs = df_filtered_logs.rename(columns={
-                                "log_date": "Date", "project_name": "Project", "activity_type": "Activity",
-                                "hours_spent": "Hours", "tags": "Tags", "description": "Description"
-                            })
-                            
-                            display_log_cols = ["Date", "Project", "Activity", "Hours", "Tags", "Description"]
-                            existing_log_cols = [c for c in display_log_cols if c in df_filtered_logs.columns]
-                            st.dataframe(df_filtered_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+                        if total_time <= 0:
+                            st.error("Please ensure the End Time is after the Start Time.")
+                        elif not log_desc.strip():
+                            st.error("Please provide a brief description of the work done.")
                         else:
-                            st.info("No logs found for the selected date range.")
-                    else:
-                        st.info("You haven't submitted any timesheet logs yet.")
-            else:
-                st.warning("Please select a valid start and end date to view history.")
+                            actual_log_code = log_project_options[log_proj_display]
+                            final_log_code = None if actual_log_code == "INTERNAL" else actual_log_code
+
+                            log_payload = {
+                                "team_member_id": selected_member_id,
+                                "project_code": final_log_code,
+                                "log_date": log_date.isoformat(),
+                                "activity_type": log_activity,
+                                "start_time": start_time.strftime("%H:%M:%S"),
+                                "end_time": end_time.strftime("%H:%M:%S"),
+                                "hours_spent": total_time,
+                                "description": log_desc,
+                                "tags": log_tags
+                            }
+                            try:
+                                supabase.table("team_logs").insert(log_payload).execute()
+                                st.success(f"Log submitted successfully for {total_time:.2f} hours!")
+                                st.rerun() 
+                            except Exception as e:
+                                st.error(f"Failed to submit log: {e}")
+                
+                # Inline Tag Generation
+                with st.expander("➕ Add New Tag"):
+                    with st.form("new_tag_form", clear_on_submit=True):
+                        new_inline_tag = st.text_input("New Tag Name", placeholder="e.g., Urgent Approval")
+                        if st.form_submit_button("Add Tag"):
+                            if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
+                                updated_tags = global_tags + [new_inline_tag.strip()]
+                                try:
+                                    supabase.table("aos_settings").update({"options": updated_tags}).eq("category", "tags").execute()
+                                    st.success(f"Tag '{new_inline_tag.strip()}' added!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to add tag: {e}")
+
+            # --- RIGHT COLUMN (History & Analytics) ---
+            with col_history:
+                st.subheader("My Timesheet History")
+                
+                today = datetime.today().date()
+                default_start = today - timedelta(days=7)
+                date_range = st.date_input("Select Date Range", value=(default_start, today))
+                
+                if isinstance(date_range, tuple) and len(date_range) == 2:
+                    start_date, end_date = date_range
+                    
+                    if logs_data:
+                        my_logs = [log for log in logs_data if log.get('team_member_id') == selected_member_id]
+                        if my_logs:
+                            df_my_logs = pd.DataFrame(my_logs)
+                            df_my_logs['log_date'] = pd.to_datetime(df_my_logs['log_date']).dt.date
+                            
+                            mask = (df_my_logs['log_date'] >= start_date) & (df_my_logs['log_date'] <= end_date)
+                            df_filtered_logs = df_my_logs.loc[mask].copy()
+                            
+                            if not df_filtered_logs.empty:
+                                total_logged_hours = df_filtered_logs['hours_spent'].sum()
+                                st.metric(label="Total Hours Logged (Selected Period)", value=f"{total_logged_hours:.2f} hrs")
+                                
+                                df_filtered_logs["project_name"] = df_filtered_logs["project_code"].apply(lambda x: "Internal/No Project" if pd.isna(x) else f"{x} - {project_map.get(x, 'Unknown')}")
+                                df_filtered_logs = df_filtered_logs.rename(columns={
+                                    "log_date": "Date", "project_name": "Project", "activity_type": "Activity",
+                                    "hours_spent": "Hours", "tags": "Tags", "description": "Description"
+                                })
+                                
+                                display_log_cols = ["Date", "Project", "Activity", "Hours", "Tags", "Description"]
+                                existing_log_cols = [c for c in display_log_cols if c in df_filtered_logs.columns]
+                                st.dataframe(df_filtered_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
+                            else:
+                                st.info("No logs found for the selected date range.")
+                        else:
+                            st.info("You haven't submitted any timesheet logs yet.")
+                            
+                        # Manage Recent Logs (Delete)
+                        st.divider()
+                        st.subheader("Manage Recent Logs")
+                        recent_logs = [log for log in my_logs if (today - pd.to_datetime(log['log_date']).date()).days <= 7]
+                        
+                        if recent_logs:
+                            log_del_options = {}
+                            for log in recent_logs:
+                                proj_display = project_map.get(log.get('project_code'), 'Internal') if log.get('project_code') else 'Internal'
+                                label = f"{log['log_date']} - {proj_display} - {log.get('hours_spent', 0):.2f} hrs"
+                                log_del_options[label] = log['id']
+                                
+                            selected_log_to_delete = st.selectbox("Select Log to Delete (Last 7 Days)", options=list(log_del_options.keys()))
+                            
+                            if st.button("🗑️ Delete Selected Log", type="primary"):
+                                try:
+                                    supabase.table("team_logs").delete().eq("id", log_del_options[selected_log_to_delete]).execute()
+                                    st.success("Log deleted successfully!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to delete log: {e}")
+                        else:
+                            st.write("No logs recorded in the last 7 days available for deletion.")
+                else:
+                    st.warning("Please select a valid start and end date to view history.")
 
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
