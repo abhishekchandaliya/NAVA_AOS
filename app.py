@@ -9,13 +9,15 @@ import time
 st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide")
 
 # --- Session State Initialization ---
+if 'current_user' not in st.session_state:
+    st.session_state.current_user = None
+
 if 'selected_project_code' not in st.session_state:
     st.session_state.selected_project_code = None
 
 if 'daily_log_cart' not in st.session_state:
     st.session_state.daily_log_cart = []
 
-# NEW: Dynamic Key Counter for the history dataframe
 if 'grid_key' not in st.session_state: 
     st.session_state.grid_key = 0
 
@@ -55,25 +57,60 @@ except Exception as e:
     st.error(f"Error loading global configuration: {e}")
     team_data, global_activity_types, global_tags, global_designations = [], [], [], []
 
-# --- Sidebar Navigation & Global Login ---
-st.sidebar.title("AOS Navigation")
-
 if not team_data:
-    st.sidebar.warning("No team members found in the database. Please add users.")
+    st.warning("No team members found in the database. Please configure the database.")
     st.stop()
 
-selected_member_name = st.sidebar.selectbox("👤 Current User", options=list(name_to_id_map.keys()))
-selected_member_id = name_to_id_map[selected_member_name]
-selected_member_role = name_to_role_map[selected_member_name] 
+# ==========================================
+# LOGIN GATE
+# ==========================================
+if st.session_state.current_user is None:
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>AOS Authentication</h2>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        with st.form("login_form"):
+            user_options = ["-- Select Your Name --"] + list(name_to_id_map.keys())
+            selected_user = st.selectbox("System User", options=user_options, label_visibility="collapsed")
+            
+            submit_login = st.form_submit_button("Enter Workspace", use_container_width=True)
+            
+            if submit_login:
+                if selected_user == "-- Select Your Name --":
+                    st.error("Please select a valid user to log in.")
+                else:
+                    st.session_state.current_user = {
+                        "name": selected_user,
+                        "id": name_to_id_map[selected_user],
+                        "role": name_to_role_map[selected_user]
+                    }
+                    st.rerun()
+    st.stop()
 
+# --- Active Session Details ---
+selected_member_name = st.session_state.current_user["name"]
+selected_member_id = st.session_state.current_user["id"]
+selected_member_role = st.session_state.current_user["role"]
+
+# --- Sidebar Navigation & RBAC ---
+st.sidebar.title("AOS Navigation")
+st.sidebar.markdown(f"User: {selected_member_name}<br>Role: {selected_member_role}", unsafe_allow_html=True)
 st.sidebar.divider()
 
-nav_pages = ["Principal Dashboard", "Assign Task", "Team Board"]
-
+nav_pages = []
 if selected_member_role in ["Principal Architect", "Manager"]:
-    nav_pages.append("Admin Settings")
+    nav_pages.extend(["Principal Dashboard", "Assign Task", "Team Board", "Admin Settings"])
+else:
+    nav_pages.extend(["Assign Task", "Team Board"])
 
 page = st.sidebar.radio("Go to", nav_pages)
+
+st.sidebar.divider()
+if st.sidebar.button("Log Out", use_container_width=True):
+    st.session_state.current_user = None
+    st.session_state.selected_project_code = None
+    st.rerun()
 
 # ==========================================
 # PAGE 1: PRINCIPAL DASHBOARD & PROJECT HUB
@@ -97,15 +134,15 @@ if page == "Principal Dashboard":
         # STATE 1: PROJECT HUB (DRILL-DOWN VIEW)
         # ---------------------------------------------------------
         if st.session_state.selected_project_code:
-            st.button("⬅️ Back to Main Dashboard", on_click=go_to_dashboard)
+            st.button("Back to Main Dashboard", on_click=go_to_dashboard)
             
             target_code = st.session_state.selected_project_code
             proj_details = next((p for p in projects_data if p['project_code'] == target_code), None)
             
             if proj_details:
                 lead_name = id_to_name_map.get(proj_details.get('team_lead'), "Unassigned")
-                st.title(f"🚀 Project Hub: {target_code}")
-                st.markdown(f"**{proj_details.get('project_name', 'Unnamed')}** | Lead: *{lead_name}* | Stage: *{proj_details.get('current_stage', 'N/A')}*")
+                st.title(f"Project Hub: {target_code}")
+                st.markdown(f"{proj_details.get('project_name', 'Unnamed')} | Lead: {lead_name} | Stage: {proj_details.get('current_stage', 'N/A')}")
                 st.divider()
                 
                 st.subheader("Critical Path Summary")
@@ -122,7 +159,7 @@ if page == "Principal Dashboard":
                         cols = st.columns(len(summary_df))
                         for i, (_, row) in enumerate(summary_df.iterrows()):
                             with cols[i]:
-                                st.info(f"**{row['category']}**\n\n{row.get('content', '')}\n\n*(Updated: {row['created_at'].strftime('%Y-%m-%d')})*")
+                                st.info(f"{row['category']}\n\n{row.get('content', '')}\n\n(Updated: {row['created_at'].strftime('%Y-%m-%d')})")
                     else:
                         st.write("No updates logged for this project yet.")
                 else:
@@ -130,7 +167,7 @@ if page == "Principal Dashboard":
                     
                 st.divider()
 
-                st.subheader("🚨 Active Escalations")
+                st.subheader("Active Escalations")
                 if not df_ledger.empty and 'project_code' in df_ledger.columns:
                     active_escalations = df_ledger[(df_ledger['project_code'] == target_code) & (df_ledger['is_principal_action_required'] == True)].copy()
                     
@@ -140,41 +177,41 @@ if page == "Principal Dashboard":
                             req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
                             
                             with st.form(key=f"triage_form_{row.get('id', idx)}"):
-                                st.markdown(f"**{row.get('category', 'Uncategorized')}** | *{date_str}* | Requested by: *{req_by}*")
-                                st.markdown(f"**Action:** {row.get('action_type', 'N/A')} | **Details:** {row.get('content', '')}")
+                                st.markdown(f"{row.get('category', 'Uncategorized')} | {date_str} | Requested by: {req_by}")
+                                st.markdown(f"Action: {row.get('action_type', 'N/A')} | Details: {row.get('content', '')}")
                                 st.divider()
                                 
                                 decision = st.radio("Executive Decision", options=[
-                                    "🟢 Resolve & Close", 
-                                    "🟠 Return to Team Lead (Needs Action)", 
-                                    "🔵 Schedule / Follow-up"
+                                    "Resolve & Close", 
+                                    "Return to Team Lead (Needs Action)", 
+                                    "Schedule / Follow-up"
                                 ])
                                 feedback = st.text_area("Principal Instructions / Feedback", placeholder="Enter specific directives for the team...")
                                 
                                 if st.form_submit_button("Submit Triage Decision", type="primary"):
                                     payload = {"principal_feedback": feedback.strip()}
                                     
-                                    if decision == "🟢 Resolve & Close":
+                                    if decision == "Resolve & Close":
                                         payload["is_principal_action_required"] = False
                                         payload["escalation_status"] = "Resolved"
-                                    elif decision == "🟠 Return to Team Lead (Needs Action)":
+                                    elif decision == "Return to Team Lead (Needs Action)":
                                         payload["is_principal_action_required"] = False
                                         payload["escalation_status"] = "Pending Lead Action"
-                                    elif decision == "🔵 Schedule / Follow-up":
+                                    elif decision == "Schedule / Follow-up":
                                         payload["is_principal_action_required"] = True
                                         payload["escalation_status"] = "Scheduled"
                                         
                                     try:
                                         supabase.table("project_ledger").update(payload).eq("id", row['id']).execute()
-                                        st.success("Escalation triaged successfully!")
+                                        st.success("Escalation triaged successfully.")
                                         time.sleep(0.5)
                                         st.rerun() 
                                     except Exception as e:
                                         st.error(f"Failed to process triage: {e}")
                     else:
-                        st.success("No active escalations for this project.")
+                        st.write("No active escalations for this project.")
                 else:
-                    st.success("No active escalations for this project.")
+                    st.write("No active escalations for this project.")
 
                 st.divider()
                 
@@ -202,18 +239,19 @@ if page == "Principal Dashboard":
         else:
             st.title("Principal Dashboard")
             
+            # --- Principal Action Center (Grouped Inbox) ---
             df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
             if not df_ledger.empty and 'is_principal_action_required' in df_ledger.columns:
                 action_req_df = df_ledger[df_ledger['is_principal_action_required'] == True].copy()
                 
                 if not action_req_df.empty:
-                    st.error("### 🔴 Principal Intervention Required")
+                    st.subheader("Principal Intervention Required")
                     
                     action_req_df['action_type'] = action_req_df['action_type'].fillna('Uncategorized')
                     grouped_escalations = action_req_df.groupby('action_type')
                     
                     for action_type, group in grouped_escalations:
-                        with st.expander(f"📌 {action_type} ({len(group)} Pending Actions)", expanded=True):
+                        with st.expander(f"{action_type} ({len(group)} Pending Actions)", expanded=True):
                             for idx, row in group.sort_values('created_at', ascending=False).iterrows():
                                 proj_code = row['project_code']
                                 proj_name = project_map.get(proj_code, 'Unknown')
@@ -222,20 +260,21 @@ if page == "Principal Dashboard":
                                 
                                 c1, c2, c3 = st.columns([5, 3, 2])
                                 with c1:
-                                    st.markdown(f"**{proj_code} - {proj_name}** | {date_str}")
+                                    st.write(f"{proj_code} - {proj_name} | {date_str}")
                                 with c2:
-                                    st.markdown(f"Lead: **{req_by}**")
+                                    st.write(f"Lead: {req_by}")
                                 with c3:
-                                    st.button("View Hub", key=f"flag_hub_{row.get('id', idx)}", on_click=open_hub, args=(proj_code,), type="primary", use_container_width=True)
-                                st.write("---")
+                                    st.button("View Hub", key=f"flag_hub_{row.get('id', idx)}", on_click=open_hub, args=(proj_code,), use_container_width=True)
+                                st.divider()
             
             if projects_data:
-                dash_tab1, dash_tab2, dash_tab3 = st.tabs(["⚠️ Portfolio Health", "📊 Resource Allocation", "🗂️ Master Directory"])
+                dash_tab1, dash_tab2, dash_tab3 = st.tabs(["Portfolio Health", "Resource Allocation", "Master Directory"])
                 
                 df_projects = pd.DataFrame(projects_data)
                 if "team_lead" in df_projects.columns:
                     df_projects["team_lead_name"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
 
+                # --- TAB 1: PORTFOLIO HEALTH ---
                 with dash_tab1:
                     total_projects = len(projects_data)
                     active_projects = len([p for p in projects_data if p.get('status', '').lower() == 'active'])
@@ -253,7 +292,7 @@ if page == "Principal Dashboard":
                         st.metric(label="Total Portfolio", value=total_projects)
                         
                     st.divider()
-                    st.subheader("⚠️ Action Required")
+                    st.subheader("Action Required")
                     
                     action_required_df = df_projects[df_projects['tracking_status'].isin(["Critical", "Delay"])]
                     
@@ -262,8 +301,9 @@ if page == "Principal Dashboard":
                         exist_cols = [c for c in display_cols if c in action_required_df.columns]
                         st.dataframe(action_required_df[exist_cols], use_container_width=True, hide_index=True)
                     else:
-                        st.success("All projects are currently on track! No critical actions required.")
+                        st.write("All projects are currently on track.")
 
+                # --- TAB 2: RESOURCE ALLOCATION ---
                 with dash_tab2:
                     if logs_data:
                         df_logs = pd.DataFrame(logs_data)
@@ -282,12 +322,12 @@ if page == "Principal Dashboard":
                         if not df_week.empty:
                             chart_col1, chart_col2 = st.columns(2)
                             with chart_col1:
-                                st.markdown("**Total Hours Logged this Week by Team Member**")
+                                st.write("Total Hours Logged this Week by Team Member")
                                 member_hours = df_week.groupby("Person")["Hours"].sum().reset_index()
                                 st.bar_chart(member_hours.set_index("Person"))
                                 
                             with chart_col2:
-                                st.markdown("**Firm-wide Activity Breakdown (This Week)**")
+                                st.write("Firm-wide Activity Breakdown (This Week)")
                                 activity_hours = df_week.groupby("Activity")["Hours"].sum().reset_index()
                                 pie_chart = alt.Chart(activity_hours).mark_arc().encode(
                                     theta=alt.Theta(field="Hours", type="quantitative"),
@@ -296,20 +336,21 @@ if page == "Principal Dashboard":
                                 ).properties(height=300)
                                 st.altair_chart(pie_chart, use_container_width=True)
                         else:
-                            st.info("No hours logged yet this week.")
+                            st.write("No hours logged yet this week.")
                             
                         st.divider()
-                        st.markdown("**Raw Timesheet Audit Logs**")
+                        st.write("Raw Timesheet Audit Logs")
                         log_display_cols = ["Date", "Person", "Project", "Hours", "Activity", "Description"]
                         existing_log_cols = [col for col in log_display_cols if col in df_logs.columns]
                         st.dataframe(df_logs[existing_log_cols].sort_values(by="Date", ascending=False), use_container_width=True, hide_index=True)
                     else:
-                        st.info("No timesheet logs found in the database yet.")
+                        st.write("No timesheet logs found in the database yet.")
 
+                # --- TAB 3: MASTER DIRECTORY ---
                 with dash_tab3:
                     st.subheader("Project Master Directory")
                     
-                    st.markdown("##### 🚀 Access Project Hub")
+                    st.write("Access Project Hub")
                     hub_col1, hub_col2 = st.columns([3, 1])
                     with hub_col1:
                         proj_list = [f"{row['project_code']} - {row['project_name']}" for _, row in df_projects.iterrows()]
@@ -342,7 +383,7 @@ if page == "Principal Dashboard":
                     st.dataframe(filtered_dir[proj_existing_columns], use_container_width=True, hide_index=True)
 
             else:
-                st.info("No projects found in the database. Add some projects to see them here.")
+                st.write("No projects found in the database. Add some projects to see them here.")
             
     except Exception as e:
         st.error(f"Error fetching dashboard data: {e}")
@@ -351,7 +392,7 @@ if page == "Principal Dashboard":
 # PAGE 2: ASSIGN TASK
 # ==========================================
 elif page == "Assign Task":
-    st.title("Assign a Task")
+    st.title("Assign Task")
     
     try:
         projects_response = supabase.table("projects").select("project_code, project_name, team_lead").execute()
@@ -391,7 +432,7 @@ elif page == "Assign Task":
             selected_assignee_name = st.selectbox("Assign To", options=list(name_to_id_map.keys()))
             
             st.divider()
-            st.markdown("##### Task Specifications")
+            st.write("Task Specifications")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -422,7 +463,7 @@ elif page == "Assign Task":
                 
                 try:
                     supabase.table("tasks").insert(new_task).execute()
-                    st.success(f"Task successfully assigned to {selected_assignee_name} for project {actual_project_code}!")
+                    st.success(f"Task assigned to {selected_assignee_name} for project {actual_project_code}.")
                 except Exception as e:
                     st.error(f"Failed to assign task: {e}")
 
@@ -431,7 +472,6 @@ elif page == "Assign Task":
 # ==========================================
 elif page == "Team Board":
     st.title("Team Board")
-    st.markdown(f"**Welcome, {selected_member_name}** | Role: *{selected_member_role}*")
     
     try:
         tasks_response = supabase.table("tasks").select("*").execute()
@@ -446,7 +486,7 @@ elif page == "Team Board":
         
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
         
-        tab1, tab2, tab3 = st.tabs(["📋 My Tasks", "🏗️ Update Projects", "⏱️ Time Tracker & Analytics"])
+        tab1, tab2, tab3 = st.tabs(["My Tasks", "Update Projects", "Time Tracker & Analytics"])
         
         # === TAB 1: MY TASKS ===
         with tab1:
@@ -473,12 +513,12 @@ elif page == "Team Board":
                     task_id_to_update = task_options[selected_task_display]
                     try:
                         supabase.table("tasks").update({"status": new_status}).eq("id", task_id_to_update).execute()
-                        st.success("Task status updated successfully!")
+                        st.success("Task status updated.")
                         st.rerun() 
                     except Exception as e:
                         st.error(f"Failed to update task: {e}")
             else:
-                st.info("You currently have no active tasks assigned.")
+                st.write("You currently have no active tasks assigned.")
                 
         # === TAB 2: UPDATE PROJECTS ===
         with tab2:
@@ -489,7 +529,7 @@ elif page == "Team Board":
                     allowed_projects = [p for p in projects_data if p.get('team_lead') == selected_member_id]
                 
                 if not allowed_projects:
-                    st.info("You are not assigned as the Team Lead for any projects.")
+                    st.write("You are not assigned as the Team Lead for any projects.")
                 else:
                     my_active = len([p for p in allowed_projects if p.get('status', '').lower() == 'active'])
                     my_critical = len([p for p in allowed_projects if p.get('tracking_status', '').lower() == 'critical'])
@@ -505,19 +545,19 @@ elif page == "Team Board":
                         pending_feedback = [l for l in ledger_data if l.get('escalation_status') == 'Pending Lead Action' and l.get('project_code') in allowed_proj_codes]
                         
                         if pending_feedback:
-                            with st.expander("📬 Principal Feedback / Action Required", expanded=True):
+                            with st.expander("Principal Feedback / Action Required", expanded=True):
                                 for idx, fb in enumerate(pending_feedback):
                                     fb_date = pd.to_datetime(fb['created_at']).strftime('%b %d, %Y')
                                     fb_proj = fb['project_code']
                                     fb_text = fb.get('principal_feedback', 'No feedback provided.')
                                     
-                                    st.markdown(f"**{fb_proj}** | *{fb_date}*")
-                                    st.warning(f"**Principal Says:** {fb_text}")
+                                    st.write(f"{fb_proj} | {fb_date}")
+                                    st.write(f"Principal Feedback: {fb_text}")
                                     
                                     if st.button("Acknowledge & Clear", key=f"ack_fb_{fb['id']}"):
                                         try:
                                             supabase.table("project_ledger").update({"escalation_status": "Resolved"}).eq("id", fb['id']).execute()
-                                            st.toast("Feedback Acknowledged!", icon="✅")
+                                            st.toast("Feedback Acknowledged")
                                             time.sleep(0.5)
                                             st.rerun()
                                         except Exception as e:
@@ -547,7 +587,7 @@ elif page == "Team Board":
                         col_left, col_right = st.columns(2)
                         
                         with col_left:
-                            st.markdown("##### Project Status")
+                            st.write("Project Status")
                             new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
                             new_tracking = st.selectbox("Tracking Status", options=status_options, index=tracking_idx)
                             
@@ -556,12 +596,12 @@ elif page == "Team Board":
                                 new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
                                 
                         with col_right:
-                            st.markdown("##### Log Activity Ledger")
+                            st.write("Log Activity Ledger")
                             update_category = st.selectbox("Category", ["Design", "Client", "Site", "Vendor", "Statutory"])
                             update_text = st.text_area("Update Details", placeholder="Optional but recommended")
                             
-                            st.markdown("**Principal Escalation**")
-                            flag_principal = st.checkbox("🔴 Flag for Principal Intervention")
+                            st.write("Principal Escalation")
+                            flag_principal = st.checkbox("Flag for Principal Intervention")
                             action_type = st.selectbox("Action Type (If Flagged)", ["None", "Site Visit Required", "Client Call Required", "Design Approval", "Financial Review"])
                         
                         submit_update = st.form_submit_button("Submit Combined Update", type="primary", use_container_width=True)
@@ -595,7 +635,7 @@ elif page == "Team Board":
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
-                                    st.toast("Project Updated & Logged Successfully!", icon="✅")
+                                    st.toast("Project Updated & Logged Successfully")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -632,7 +672,7 @@ elif page == "Team Board":
                 with col_new_tag:
                     st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                     new_inline_tag = st.text_input("New Tag", placeholder="Tag Name", label_visibility="collapsed")
-                    if st.button("➕", use_container_width=True):
+                    if st.button("Add Tag", use_container_width=True):
                         if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
                             updated_tags = global_tags + [new_inline_tag.strip()]
                             try:
@@ -673,12 +713,12 @@ elif page == "Team Board":
                         st.rerun()
 
                 st.divider()
-                st.markdown("**Timesheet Cart**")
+                st.write("Timesheet Cart")
                 if st.session_state.daily_log_cart:
                     cart_df = pd.DataFrame(st.session_state.daily_log_cart)
                     st.dataframe(cart_df[["log_date", "_display_proj", "activity_type", "hours_spent", "description"]], use_container_width=True)
                     
-                    if st.button("🚀 Submit Entire Day to Database", type="primary", use_container_width=True):
+                    if st.button("Submit Entire Day to Database", type="primary", use_container_width=True):
                         payloads = []
                         for item in st.session_state.daily_log_cart:
                             payload = item.copy()
@@ -688,13 +728,13 @@ elif page == "Team Board":
                         try:
                             supabase.table("team_logs").insert(payloads).execute()
                             st.session_state.daily_log_cart = []
-                            st.success("All logs submitted successfully!")
+                            st.success("All logs submitted successfully.")
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to submit batch: {e}")
                 else:
-                    st.info("Your timesheet cart is empty.")
+                    st.write("Your timesheet cart is empty.")
 
             with col_history:
                 st.subheader("My Timesheet History")
@@ -741,16 +781,15 @@ elif page == "Team Board":
                                     key=current_grid_key
                                 )
                                 
-                                # Click-to-Edit Logic with dynamic key fix
                                 if current_grid_key in st.session_state and len(st.session_state[current_grid_key]['selection']['rows']) > 0:
                                     selected_idx = st.session_state[current_grid_key]['selection']['rows'][0]
                                     selected_log = df_display.iloc[selected_idx]
                                     
                                     st.divider()
-                                    st.subheader("✏️ Edit Selected Log")
+                                    st.subheader("Edit Selected Log")
                                     
                                     with st.form("edit_log_form"):
-                                        st.markdown(f"**Project:** {selected_log['project_name']} | **Date:** {selected_log['log_date']}")
+                                        st.write(f"Project: {selected_log['project_name']} | Date: {selected_log['log_date']}")
                                         
                                         edit_activity = st.selectbox("Activity Type", options=activity_choices, index=activity_choices.index(selected_log['activity_type']) if selected_log['activity_type'] in activity_choices else 0)
                                         
@@ -788,8 +827,7 @@ elif page == "Team Board":
                                                 }
                                                 try:
                                                     supabase.table("team_logs").update(update_payload).eq("id", selected_log['id']).execute()
-                                                    st.success("Log updated successfully!")
-                                                    # NEW: Clean increment of the grid key instead of mutating state dict
+                                                    st.success("Log updated.")
                                                     st.session_state.grid_key += 1
                                                     time.sleep(0.5)
                                                     st.rerun()
@@ -797,11 +835,11 @@ elif page == "Team Board":
                                                     st.error(f"Failed to update log: {e}")
 
                             else:
-                                st.info("No logs found for the selected date range.")
+                                st.write("No logs found for the selected date range.")
                         else:
-                            st.info("You haven't submitted any timesheet logs yet.")
+                            st.write("You haven't submitted any timesheet logs yet.")
                 else:
-                    st.warning("Please select a valid start and end date to view history.")
+                    st.write("Please select a valid start and end date to view history.")
 
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
@@ -814,112 +852,194 @@ elif page == "Admin Settings":
         st.error("Access Denied: You must be a Principal Architect or Manager to view this page.")
     else:
         st.title("Admin Settings")
-        st.markdown("Manage global application configurations and your team directory.")
+        st.write("Manage global application configurations and your team directory.")
         
-        st.subheader("Global Configurations")
-        col1, col2, col3 = st.columns(3)
+        adm_tab1, adm_tab2, adm_tab3 = st.tabs(["Global Configurations", "Team Directory", "Master Project Control"])
         
-        with col1:
-            with st.form("activity_settings_form"):
-                st.markdown("**Activity Types**")
-                active_activities = st.multiselect("Current Types", options=global_activity_types, default=global_activity_types)
-                new_activity = st.text_input("Add New Type")
-                
-                if st.form_submit_button("Save Activities", type="primary"):
-                    final_activities = active_activities.copy()
-                    if new_activity.strip() and new_activity.strip() not in final_activities:
-                        final_activities.append(new_activity.strip())
-                    try:
-                        supabase.table("aos_settings").update({"options": final_activities}).eq("category", "activity_types").execute()
-                        st.success("Updated!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        
-        with col2:
-            with st.form("tags_settings_form"):
-                st.markdown("**Timesheet Tags**")
-                active_tags = st.multiselect("Current Tags", options=global_tags, default=global_tags)
-                new_tag = st.text_input("Add New Tag")
-                
-                if st.form_submit_button("Save Tags", type="primary"):
-                    final_tags = active_tags.copy()
-                    if new_tag.strip() and new_tag.strip() not in final_tags:
-                        final_tags.append(new_tag.strip())
-                    try:
-                        supabase.table("aos_settings").update({"options": final_tags}).eq("category", "tags").execute()
-                        st.success("Updated!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                        
-        with col3:
-            with st.form("designation_settings_form"):
-                st.markdown("**Company Designations**")
-                active_designations = st.multiselect("Current Designations", options=global_designations, default=global_designations)
-                new_designation = st.text_input("Add New Designation")
-                
-                if st.form_submit_button("Save Designations", type="primary"):
-                    final_designations = active_designations.copy()
-                    if new_designation.strip() and new_designation.strip() not in final_designations:
-                        final_designations.append(new_designation.strip())
-                    try:
-                        supabase.table("aos_settings").upsert({"category": "designations", "options": final_designations}).execute()
-                        st.success("Updated!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+        # --- TAB 1: GLOBAL CONFIGURATIONS ---
+        with adm_tab1:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                with st.form("activity_settings_form"):
+                    st.write("Activity Types")
+                    active_activities = st.multiselect("Current Types", options=global_activity_types, default=global_activity_types)
+                    new_activity = st.text_input("Add New Type")
+                    
+                    if st.form_submit_button("Save Activities", type="primary"):
+                        final_activities = active_activities.copy()
+                        if new_activity.strip() and new_activity.strip() not in final_activities:
+                            final_activities.append(new_activity.strip())
+                        try:
+                            supabase.table("aos_settings").update({"options": final_activities}).eq("category", "activity_types").execute()
+                            st.success("Updated")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                            
+            with col2:
+                with st.form("tags_settings_form"):
+                    st.write("Timesheet Tags")
+                    active_tags = st.multiselect("Current Tags", options=global_tags, default=global_tags)
+                    new_tag = st.text_input("Add New Tag")
+                    
+                    if st.form_submit_button("Save Tags", type="primary"):
+                        final_tags = active_tags.copy()
+                        if new_tag.strip() and new_tag.strip() not in final_tags:
+                            final_tags.append(new_tag.strip())
+                        try:
+                            supabase.table("aos_settings").update({"options": final_tags}).eq("category", "tags").execute()
+                            st.success("Updated")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                            
+            with col3:
+                with st.form("designation_settings_form"):
+                    st.write("Company Designations")
+                    active_designations = st.multiselect("Current Designations", options=global_designations, default=global_designations)
+                    new_designation = st.text_input("Add New Designation")
+                    
+                    if st.form_submit_button("Save Designations", type="primary"):
+                        final_designations = active_designations.copy()
+                        if new_designation.strip() and new_designation.strip() not in final_designations:
+                            final_designations.append(new_designation.strip())
+                        try:
+                            supabase.table("aos_settings").upsert({"category": "designations", "options": final_designations}).execute()
+                            st.success("Updated")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
-        st.divider()
-        st.subheader("Manage Team Directory")
-        dir_col1, dir_col2 = st.columns(2)
-        
-        with dir_col1:
-            with st.form("add_employee_form", clear_on_submit=True):
-                st.markdown("**Add New Employee**")
-                new_emp_name = st.text_input("Full Name")
-                new_emp_role = st.selectbox("Designation", options=global_designations)
-                
-                if st.form_submit_button("Add Employee", type="primary"):
-                    if not new_emp_name.strip():
-                        st.error("Please provide a valid name.")
-                    else:
-                        try:
-                            supabase.table("team_members").insert({
-                                "full_name": new_emp_name.strip(),
-                                "role": new_emp_role
-                            }).execute()
-                            st.success(f"{new_emp_name} added successfully!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to add employee: {e}")
+        # --- TAB 2: TEAM DIRECTORY ---
+        with adm_tab2:
+            dir_col1, dir_col2 = st.columns(2)
+            
+            with dir_col1:
+                with st.form("add_employee_form", clear_on_submit=True):
+                    st.write("Add New Employee")
+                    new_emp_name = st.text_input("Full Name")
+                    new_emp_role = st.selectbox("Designation", options=global_designations)
+                    
+                    if st.form_submit_button("Add Employee", type="primary"):
+                        if not new_emp_name.strip():
+                            st.error("Please provide a valid name.")
+                        else:
+                            try:
+                                supabase.table("team_members").insert({
+                                    "full_name": new_emp_name.strip(),
+                                    "role": new_emp_role
+                                }).execute()
+                                st.success(f"{new_emp_name} added successfully.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to add employee: {e}")
 
-        with dir_col2:
-            st.markdown("**Edit or Remove Employee**")
-            if team_data:
-                emp_to_edit_name = st.selectbox("Select Employee", options=list(name_to_id_map.keys()), key="edit_emp_select")
-                emp_to_edit_id = name_to_id_map.get(emp_to_edit_name)
-                current_role = name_to_role_map.get(emp_to_edit_name, "Team Member")
-                
-                role_idx = global_designations.index(current_role) if current_role in global_designations else 0
-                updated_role = st.selectbox("Update Designation", options=global_designations, index=role_idx)
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("Update Role", use_container_width=True):
-                        try:
-                            supabase.table("team_members").update({"role": updated_role}).eq("id", emp_to_edit_id).execute()
-                            st.success("Role updated successfully!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Update failed: {e}")
-                with c2:
-                    if st.button("Remove User", type="primary", use_container_width=True):
-                        try:
-                            supabase.table("team_members").delete().eq("id", emp_to_edit_id).execute()
-                            st.success(f"{emp_to_edit_name} removed from the system.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Removal failed: {e}")
-            else:
-                st.info("No employees available to edit.")
+            with dir_col2:
+                st.write("Edit or Remove Employee")
+                if team_data:
+                    emp_to_edit_name = st.selectbox("Select Employee", options=list(name_to_id_map.keys()), key="edit_emp_select")
+                    emp_to_edit_id = name_to_id_map.get(emp_to_edit_name)
+                    current_role = name_to_role_map.get(emp_to_edit_name, "Team Member")
+                    
+                    role_idx = global_designations.index(current_role) if current_role in global_designations else 0
+                    updated_role = st.selectbox("Update Designation", options=global_designations, index=role_idx)
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Update Role", use_container_width=True):
+                            try:
+                                supabase.table("team_members").update({"role": updated_role}).eq("id", emp_to_edit_id).execute()
+                                st.success("Role updated.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Update failed: {e}")
+                    with c2:
+                        if st.button("Remove User", type="primary", use_container_width=True):
+                            try:
+                                supabase.table("team_members").delete().eq("id", emp_to_edit_id).execute()
+                                st.success(f"{emp_to_edit_name} removed.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Removal failed: {e}")
+                else:
+                    st.write("No employees available to edit.")
+
+        # --- TAB 3: MASTER PROJECT CONTROL ---
+        with adm_tab3:
+            try:
+                projects_response = supabase.table("projects").select("*").execute()
+                projects_data = projects_response.data
+            except Exception as e:
+                st.error(f"Error loading projects: {e}")
+                projects_data = []
+
+            mpc_col1, mpc_col2 = st.columns([1, 1.5])
+            
+            with mpc_col1:
+                st.subheader("Create New Project")
+                with st.form("create_project_form", clear_on_submit=True):
+                    p_code = st.text_input("Project Code")
+                    p_name = st.text_input("Project Name")
+                    p_client = st.text_input("Client Name")
+                    p_lead = st.selectbox("Assign Team Lead", options=list(name_to_id_map.keys()))
+                    
+                    if st.form_submit_button("Create Project", type="primary", use_container_width=True):
+                        if not p_code.strip() or not p_name.strip():
+                            st.error("Project Code and Name are required.")
+                        else:
+                            new_project_payload = {
+                                "project_code": p_code.strip(),
+                                "project_name": p_name.strip(),
+                                "client_name": p_client.strip(),
+                                "team_lead": name_to_id_map[p_lead],
+                                "status": "Active",
+                                "current_stage": "Proposal",
+                                "tracking_status": "On Track"
+                            }
+                            try:
+                                supabase.table("projects").insert(new_project_payload).execute()
+                                st.success(f"Project {p_code} created successfully.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to create project: {e}")
+
+            with mpc_col2:
+                st.subheader("Manage Existing Projects")
+                if projects_data:
+                    proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data}
+                    selected_proj_to_update = st.selectbox("Select Active Project", options=list(proj_update_options.keys()))
+                    actual_proj_code = proj_update_options[selected_proj_to_update]
+                    
+                    selected_project_data = next((p for p in projects_data if p['project_code'] == actual_proj_code), {})
+                    
+                    current_lead_id = selected_project_data.get('team_lead')
+                    current_lead_name = id_to_name_map.get(current_lead_id, list(name_to_id_map.keys())[0]) if current_lead_id else list(name_to_id_map.keys())[0]
+                    current_stage_val = selected_project_data.get('current_stage')
+                    current_status_val = selected_project_data.get('status', 'Active')
+                    
+                    stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
+                    main_status_options = ["Active", "On Hold", "Completed"]
+                    
+                    lead_idx = list(name_to_id_map.keys()).index(current_lead_name) if current_lead_name in name_to_id_map else 0
+                    stage_idx = stage_options.index(current_stage_val) if current_stage_val in stage_options else 0
+                    main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
+                    
+                    with st.form("admin_manage_project_form"):
+                        new_lead_name = st.selectbox("Reassign Team Lead", options=list(name_to_id_map.keys()), index=lead_idx)
+                        new_stage = st.selectbox("Current Stage", options=stage_options, index=stage_idx)
+                        new_main_status = st.selectbox("Main Project Status", options=main_status_options, index=main_idx)
+                        
+                        if st.form_submit_button("Save Project Updates", type="primary", use_container_width=True):
+                            update_payload = {
+                                "team_lead": name_to_id_map[new_lead_name],
+                                "current_stage": new_stage,
+                                "status": new_main_status
+                            }
+                            try:
+                                supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
+                                st.success(f"Project {actual_proj_code} updated successfully.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update project: {e}")
+                else:
+                    st.write("No projects available to manage.")
