@@ -40,9 +40,11 @@ supabase = init_connection()
 try:
     team_response = supabase.table("team_members").select("id, full_name, role").execute()
     settings_response = supabase.table("aos_settings").select("*").execute()
+    taxonomy_response = supabase.table("task_taxonomy").select("*").execute()
     
     team_data = team_response.data
     settings_data = settings_response.data
+    taxonomy_data = taxonomy_response.data
     
     name_to_id_map = {member['full_name']: member['id'] for member in team_data} if team_data else {}
     id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
@@ -53,9 +55,11 @@ try:
     global_tags = settings_map.get("tags", [])
     global_designations = settings_map.get("designations", ["Principal Architect", "Manager", "Team Member"])
     
+    taxonomy_map = {row['category']: row.get('deliverables', []) for row in taxonomy_data} if taxonomy_data else {}
+    
 except Exception as e:
     st.error(f"Error loading global configuration: {e}")
-    team_data, global_activity_types, global_tags, global_designations = [], [], [], []
+    team_data, global_activity_types, global_tags, global_designations, taxonomy_map = [], [], [], [], {}
 
 if not team_data:
     st.warning("No team members found in the database. Please configure the database.")
@@ -239,7 +243,6 @@ if page == "Principal Dashboard":
         else:
             st.title("Principal Dashboard")
             
-            # --- Principal Action Center (Grouped Inbox) ---
             df_ledger = pd.DataFrame(ledger_data) if ledger_data else pd.DataFrame()
             if not df_ledger.empty and 'is_principal_action_required' in df_ledger.columns:
                 action_req_df = df_ledger[df_ledger['is_principal_action_required'] == True].copy()
@@ -274,7 +277,6 @@ if page == "Principal Dashboard":
                 if "team_lead" in df_projects.columns:
                     df_projects["team_lead_name"] = df_projects["team_lead"].map(lambda x: id_to_name_map.get(x, "Unassigned") if pd.notna(x) else "Unassigned")
 
-                # --- TAB 1: PORTFOLIO HEALTH ---
                 with dash_tab1:
                     total_projects = len(projects_data)
                     active_projects = len([p for p in projects_data if p.get('status', '').lower() == 'active'])
@@ -303,7 +305,6 @@ if page == "Principal Dashboard":
                     else:
                         st.write("All projects are currently on track.")
 
-                # --- TAB 2: RESOURCE ALLOCATION ---
                 with dash_tab2:
                     if logs_data:
                         df_logs = pd.DataFrame(logs_data)
@@ -346,7 +347,6 @@ if page == "Principal Dashboard":
                     else:
                         st.write("No timesheet logs found in the database yet.")
 
-                # --- TAB 3: MASTER DIRECTORY ---
                 with dash_tab3:
                     st.subheader("Project Master Directory")
                     
@@ -415,37 +415,31 @@ elif page == "Assign Task":
 
     if not project_options or not team_data:
         st.warning("Ensure you have at least one project and one team member in your database before assigning tasks.")
+    elif not taxonomy_map:
+        st.warning("No task taxonomy found in database. Please ask an Admin to configure Task SOPs.")
     else:
-        TASK_DICTIONARY = {
-            "Concept Design": ["Site Analysis", "Moodboard & References", "Conceptual Layouts", "Volume Massing", "Initial Presentation", "Client Revisions"],
-            "Working Drawings": ["Floor Plans", "Elevations", "Sections", "Door/Window Schedule", "Flooring Layout", "Masonry Details", "Staircase Details"],
-            "MEP Services": ["Electrical Layout", "Plumbing Layout", "HVAC Layout", "Fire Safety Plan", "Reflected Ceiling Plan (RCP)"],
-            "3D Visualization": ["Exterior 3D Views", "Interior 3D Views", "Walkthrough Animation", "Material & Lighting Setup", "Post-Production"],
-            "Site Execution": ["Site Marking / Layout", "Steel / Reinforcement Checking", "Pouring Supervision", "Vendor Coordination", "Quality Check / Snag List"],
-            "Admin / General": ["Permit Drawings", "BOQ & Estimation", "Client Handover Package", "Team Meeting"]
-        }
-
-        with st.form("task_assignment_form", clear_on_submit=True):
-            st.subheader("Task Details")
+        st.subheader("Task Details")
+        
+        selected_project_display = st.selectbox("Select Project", options=list(project_options.keys()))
+        selected_assignee_name = st.selectbox("Assign To", options=list(name_to_id_map.keys()))
+        
+        st.divider()
+        st.write("Task Specifications")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            task_category = st.selectbox("Task Category", options=list(taxonomy_map.keys()))
+        with col2:
+            task_deliverables_list = taxonomy_map.get(task_category, [])
+            task_deliverable = st.selectbox("Standard Deliverable", options=task_deliverables_list)
             
-            selected_project_display = st.selectbox("Select Project", options=list(project_options.keys()))
-            selected_assignee_name = st.selectbox("Assign To", options=list(name_to_id_map.keys()))
-            
-            st.divider()
-            st.write("Task Specifications")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                task_category = st.selectbox("Task Category", options=list(TASK_DICTIONARY.keys()))
-            with col2:
-                task_deliverable = st.selectbox("Standard Deliverable", options=TASK_DICTIONARY[task_category])
-                
-            additional_notes = st.text_input("Additional Notes (Optional)", placeholder="e.g., Check column grid dimensions on ground floor.")
-            deadline = st.date_input("Deadline", min_value=datetime.today())
-            
-            submitted = st.form_submit_button("Assign Task", type="primary")
-            
-            if submitted:
+        additional_notes = st.text_input("Additional Notes (Optional)", placeholder="e.g., Check column grid dimensions on ground floor.")
+        deadline = st.date_input("Deadline", min_value=datetime.today())
+        
+        if st.button("Assign Task", type="primary"):
+            if not task_deliverable:
+                st.error("Please select a standard deliverable.")
+            else:
                 final_description = f"{task_category} - {task_deliverable}"
                 if additional_notes.strip():
                     final_description += f". Notes: {additional_notes.strip()}"
@@ -654,8 +648,9 @@ elif page == "Team Board":
                 log_date = st.date_input("Date", value=datetime.today())
                 log_proj_display = st.selectbox("Project", options=list(log_project_options.keys()))
                 
-                activity_choices = ['Drawing', 'Design Concept & Discussion', '3D Modelling', '3D Renders', 'Site Visit', 'Internal Review', 'Client Meeting', 'Site Coordination', 'Vendor Coordination', 'Admin', 'R & D', 'Others']
-                log_activity = st.selectbox("Activity Type", options=activity_choices)
+                if not global_activity_types:
+                    global_activity_types = ['Drawing', 'Admin']
+                log_activity = st.selectbox("Activity Type", options=global_activity_types)
                 
                 col_start, col_end = st.columns(2)
                 with col_start:
@@ -666,7 +661,7 @@ elif page == "Team Board":
                 col_tags, col_new_tag = st.columns([3, 1])
                 with col_tags:
                     if not global_tags:
-                        global_tags = ['Concept', 'GFC', 'Revisions', 'Approval', 'BOQ', 'Tender', 'Presentation', 'As-Built']
+                        global_tags = ['Concept', 'Other']
                     log_tags = st.multiselect("Tags", options=global_tags)
                     
                 with col_new_tag:
@@ -791,7 +786,7 @@ elif page == "Team Board":
                                     with st.form("edit_log_form"):
                                         st.write(f"Project: {selected_log['project_name']} | Date: {selected_log['log_date']}")
                                         
-                                        edit_activity = st.selectbox("Activity Type", options=activity_choices, index=activity_choices.index(selected_log['activity_type']) if selected_log['activity_type'] in activity_choices else 0)
+                                        edit_activity = st.selectbox("Activity Type", options=global_activity_types, index=global_activity_types.index(selected_log['activity_type']) if selected_log['activity_type'] in global_activity_types else 0)
                                         
                                         try:
                                             st_time_obj = datetime.strptime(selected_log.get('start_time', "09:00:00"), "%H:%M:%S").time()
@@ -854,7 +849,7 @@ elif page == "Admin Settings":
         st.title("Admin Settings")
         st.write("Manage global application configurations and your team directory.")
         
-        adm_tab1, adm_tab2, adm_tab3 = st.tabs(["Global Configurations", "Team Directory", "Master Project Control"])
+        adm_tab1, adm_tab2, adm_tab3, adm_tab4 = st.tabs(["Global Configurations", "Team Directory", "Master Project Control", "Task SOPs"])
         
         # --- TAB 1: GLOBAL CONFIGURATIONS ---
         with adm_tab1:
@@ -1043,3 +1038,41 @@ elif page == "Admin Settings":
                                 st.error(f"Failed to update project: {e}")
                 else:
                     st.write("No projects available to manage.")
+                    
+        # --- TAB 4: TASK SOPs ---
+        with adm_tab4:
+            st.subheader("Manage Task Categories")
+            with st.form("add_category_form"):
+                new_category = st.text_input("New Category Name")
+                if st.form_submit_button("Add Category", type="primary"):
+                    if new_category.strip() and new_category.strip() not in taxonomy_map:
+                        try:
+                            supabase.table("task_taxonomy").insert({"category": new_category.strip(), "deliverables": []}).execute()
+                            st.success("Category added.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to add category: {e}")
+                            
+            st.divider()
+            st.subheader("Manage Deliverables")
+            if taxonomy_map:
+                selected_cat = st.selectbox("Select Category", options=list(taxonomy_map.keys()))
+                current_deliverables = taxonomy_map[selected_cat]
+                
+                with st.form("manage_deliverables_form"):
+                    active_delivs = st.multiselect("Current Deliverables (Click 'X' to remove)", options=current_deliverables, default=current_deliverables)
+                    new_deliv = st.text_input("Add New Deliverable")
+                    
+                    if st.form_submit_button("Save Deliverables", type="primary"):
+                        final_delivs = active_delivs.copy()
+                        if new_deliv.strip() and new_deliv.strip() not in final_delivs:
+                            final_delivs.append(new_deliv.strip())
+                            
+                        try:
+                            supabase.table("task_taxonomy").update({"deliverables": final_delivs}).eq("category", selected_cat).execute()
+                            st.success("Deliverables updated.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update deliverables: {e}")
+            else:
+                st.write("No task categories exist yet.")
