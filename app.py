@@ -33,11 +33,18 @@ def go_to_dashboard():
 def open_hub(project_code):
     st.session_state.selected_project_code = project_code
 
+def go_to_roster():
+    st.session_state.admin_emp_id = None
+
 # --- Algorithmic Code Name Engine ---
 def generate_code_name(first, father, last, existing_codes):
-    f_init = first.strip()[0].upper() if first.strip() else ""
-    m_init = father.strip()[0].upper() if father.strip() else ""
-    l_init = last.strip()[0].upper() if last.strip() else ""
+    f_val = (first or "").strip()
+    m_val = (father or "").strip()
+    l_val = (last or "").strip()
+    
+    f_init = f_val[0].upper() if f_val else ""
+    m_init = m_val[0].upper() if m_val else ""
+    l_init = l_val[0].upper() if l_val else ""
     
     base_code = f"{f_init}{m_init}{l_init}"
     if not base_code:
@@ -220,7 +227,7 @@ if page == "Principal Dashboard":
                                 feedback = st.text_area("Principal Instructions / Feedback", placeholder="Enter specific directives for the team...")
                                 
                                 if st.form_submit_button("Submit Triage Decision", type="primary"):
-                                    payload = {"principal_feedback": feedback.strip()}
+                                    payload = {"principal_feedback": (feedback or "").strip()}
                                     
                                     if decision == "Resolve and Close":
                                         payload["is_principal_action_required"] = False
@@ -467,8 +474,8 @@ elif page == "Assign Task":
                 st.error("Please select a standard deliverable.")
             else:
                 final_description = f"{task_category} - {task_deliverable}"
-                if additional_notes.strip():
-                    final_description += f". Notes: {additional_notes.strip()}"
+                if (additional_notes or "").strip():
+                    final_description += f". Notes: {(additional_notes or '').strip()}"
                 
                 member_id = name_to_id_map[selected_assignee_name]
                 actual_project_code = project_options[selected_project_display]
@@ -642,12 +649,12 @@ elif page == "Team Board":
                                 try:
                                     supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
                                     
-                                    if update_text.strip() or flag_principal:
+                                    if (update_text or "").strip() or flag_principal:
                                         new_entry = {
                                             "project_code": actual_proj_code,
                                             "author_id": selected_member_id, 
                                             "category": update_category,
-                                            "content": update_text.strip() if update_text.strip() else "Flagged for intervention.",
+                                            "content": (update_text or "").strip() if (update_text or "").strip() else "Flagged for intervention.",
                                             "is_principal_action_required": flag_principal,
                                             "action_type": action_type if flag_principal else None,
                                             "escalation_status": "Pending" if flag_principal else None
@@ -693,8 +700,8 @@ elif page == "Team Board":
                     st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                     new_inline_tag = st.text_input("New Tag", placeholder="Tag Name", label_visibility="collapsed")
                     if st.button("Add", use_container_width=True):
-                        if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
-                            updated_tags = global_tags + [new_inline_tag.strip()]
+                        if (new_inline_tag or "").strip() and (new_inline_tag or "").strip() not in global_tags:
+                            updated_tags = global_tags + [(new_inline_tag or "").strip()]
                             try:
                                 supabase.table("aos_settings").update({"options": updated_tags}).eq("category", "tags").execute()
                                 st.rerun()
@@ -712,7 +719,7 @@ elif page == "Team Board":
                     
                     if total_time <= 0:
                         st.error("Please ensure the End Time is after the Start Time.")
-                    elif not log_desc.strip():
+                    elif not (log_desc or "").strip():
                         st.error("Please provide a brief description of the work done.")
                     else:
                         actual_log_code = log_project_options[log_proj_display]
@@ -726,7 +733,7 @@ elif page == "Team Board":
                             "start_time": start_time.strftime("%H:%M:%S"),
                             "end_time": end_time.strftime("%H:%M:%S"),
                             "hours_spent": total_time,
-                            "description": log_desc,
+                            "description": (log_desc or "").strip(),
                             "tags": log_tags,
                             "_display_proj": log_proj_display 
                         })
@@ -843,7 +850,7 @@ elif page == "Team Board":
                                                     "start_time": edit_start.strftime("%H:%M:%S"),
                                                     "end_time": edit_end.strftime("%H:%M:%S"),
                                                     "hours_spent": total_edit_time,
-                                                    "description": edit_desc
+                                                    "description": (edit_desc or "").strip()
                                                 }
                                                 try:
                                                     supabase.table("team_logs").update(update_payload).eq("id", selected_log['id']).execute()
@@ -897,7 +904,7 @@ elif page == "Team Board":
                                 ec_name = ec1.text_input("Name", value=ec_data.get('Name', ''), key=f"my_ec_n_{selected_member_id}")
                                 ec_rel = ec2.text_input("Relationship", value=ec_data.get('Relationship', ''), key=f"my_ec_r_{selected_member_id}")
                                 ec_num = ec3.text_input("Contact Number", value=ec_data.get('Contact Number', ''), key=f"my_ec_c_{selected_member_id}")
-                                new_prof_data[field] = {"Name": ec_name, "Relationship": ec_rel, "Contact Number": ec_num}
+                                new_prof_data[field] = {"Name": (ec_name or "").strip(), "Relationship": (ec_rel or "").strip(), "Contact Number": (ec_num or "").strip()}
                                 
                             elif field == 'Educational Background':
                                 st.write(f"**{field}**")
@@ -917,7 +924,8 @@ elif page == "Team Board":
                                 
                             else:
                                 current_val = prof_data.get(field, "")
-                                new_prof_data[field] = st.text_input(field, value=current_val, key=f"my_cf_{field}_{selected_member_id}")
+                                temp_val = st.text_input(field, value=current_val, key=f"my_cf_{field}_{selected_member_id}")
+                                new_prof_data[field] = (temp_val or "").strip()
                             
                         if st.form_submit_button("Submit Update Request", type="primary"):
                             try:
@@ -954,8 +962,8 @@ elif page == "Admin Settings":
                     
                     if st.form_submit_button("Save Activities", type="primary"):
                         final_activities = active_activities.copy()
-                        if new_activity.strip() and new_activity.strip() not in final_activities:
-                            final_activities.append(new_activity.strip())
+                        if (new_activity or "").strip() and (new_activity or "").strip() not in final_activities:
+                            final_activities.append((new_activity or "").strip())
                         try:
                             supabase.table("aos_settings").update({"options": final_activities}).eq("category", "activity_types").execute()
                             st.success("Updated")
@@ -971,8 +979,8 @@ elif page == "Admin Settings":
                     
                     if st.form_submit_button("Save Tags", type="primary"):
                         final_tags = active_tags.copy()
-                        if new_tag.strip() and new_tag.strip() not in final_tags:
-                            final_tags.append(new_tag.strip())
+                        if (new_tag or "").strip() and (new_tag or "").strip() not in final_tags:
+                            final_tags.append((new_tag or "").strip())
                         try:
                             supabase.table("aos_settings").update({"options": final_tags}).eq("category", "tags").execute()
                             st.success("Updated")
@@ -988,8 +996,8 @@ elif page == "Admin Settings":
                     
                     if st.form_submit_button("Save Designations", type="primary"):
                         final_designations = active_designations.copy()
-                        if new_designation.strip() and new_designation.strip() not in final_designations:
-                            final_designations.append(new_designation.strip())
+                        if (new_designation or "").strip() and (new_designation or "").strip() not in final_designations:
+                            final_designations.append((new_designation or "").strip())
                         try:
                             supabase.table("aos_settings").upsert({"category": "designations", "options": final_designations}).execute()
                             st.success("Updated")
@@ -1005,8 +1013,8 @@ elif page == "Admin Settings":
                     
                     if st.form_submit_button("Save Fields", type="primary"):
                         final_fields = active_fields.copy()
-                        if new_field.strip() and new_field.strip() not in final_fields:
-                            final_fields.append(new_field.strip())
+                        if (new_field or "").strip() and (new_field or "").strip() not in final_fields:
+                            final_fields.append((new_field or "").strip())
                         try:
                             supabase.table("aos_settings").upsert({"category": "custom_profile_fields", "options": final_fields}).execute()
                             st.success("Updated")
@@ -1082,7 +1090,7 @@ elif page == "Admin Settings":
                                     ec_name = ec1.text_input("Name", value=ec_data.get('Name', ''), key=f"adm_ec_n_{emp_target_id}")
                                     ec_rel = ec2.text_input("Relationship", value=ec_data.get('Relationship', ''), key=f"adm_ec_r_{emp_target_id}")
                                     ec_num = ec3.text_input("Contact Number", value=ec_data.get('Contact Number', ''), key=f"adm_ec_c_{emp_target_id}")
-                                    new_prof_data[field] = {"Name": ec_name, "Relationship": ec_rel, "Contact Number": ec_num}
+                                    new_prof_data[field] = {"Name": (ec_name or "").strip(), "Relationship": (ec_rel or "").strip(), "Contact Number": (ec_num or "").strip()}
                                     
                                 elif field == 'Educational Background':
                                     st.write(f"**{field}**")
@@ -1102,7 +1110,8 @@ elif page == "Admin Settings":
                                     
                                 else:
                                     current_val = prof_data.get(field, "")
-                                    new_prof_data[field] = st.text_input(field, value=current_val, key=f"adm_cf_{field}_{emp_target_id}")
+                                    temp_val = st.text_input(field, value=current_val, key=f"adm_cf_{field}_{emp_target_id}")
+                                    new_prof_data[field] = (temp_val or "").strip()
                         else:
                             st.write("No custom fields configured.")
                             
@@ -1114,18 +1123,18 @@ elif page == "Admin Settings":
                             submit_del = st.form_submit_button("Delete Employee Record", use_container_width=True)
                             
                         if submit_hub:
-                            upd_full_name = f"{upd_first.strip()} {upd_last.strip()}".strip()
+                            upd_full_name = f"{(upd_first or '').strip()} {(upd_last or '').strip()}".strip()
                             existing_codes = [m.get('code_name') for m in team_data if m.get('code_name') and m.get('id') != emp_target_id]
                             upd_code = generate_code_name(upd_first, upd_father, upd_last, existing_codes)
                             
                             payload = {
-                                "first_name": upd_first.strip(),
-                                "father_name": upd_father.strip(),
-                                "last_name": upd_last.strip(),
+                                "first_name": (upd_first or "").strip(),
+                                "father_name": (upd_father or "").strip(),
+                                "last_name": (upd_last or "").strip(),
                                 "full_name": upd_full_name,
                                 "code_name": upd_code,
-                                "email": upd_email.strip(),
-                                "phone": upd_phone.strip(),
+                                "email": (upd_email or "").strip(),
+                                "phone": (upd_phone or "").strip(),
                                 "join_date": upd_join.isoformat(),
                                 "role": upd_role,
                                 "status": upd_status,
@@ -1274,22 +1283,22 @@ elif page == "Admin Settings":
                     new_role = st.selectbox("Designation", options=global_designations)
                     
                     if st.form_submit_button("Onboard Employee", type="primary"):
-                        if not new_first.strip() or not new_last.strip():
+                        if not (new_first or "").strip() or not (new_last or "").strip():
                             st.error("First and Last name are required.")
                         else:
                             existing_codes = [m.get('code_name') for m in team_data if m.get('code_name')]
-                            final_code = generate_code_name(new_first, new_father, new_last, existing_codes)
+                            final_code = generate_code_name((new_first or "").strip(), (new_father or "").strip(), (new_last or "").strip(), existing_codes)
                                 
-                            combined_name = f"{new_first.strip()} {new_last.strip()}"
+                            combined_name = f"{(new_first or '').strip()} {(new_last or '').strip()}"
                             
                             payload = {
-                                "first_name": new_first.strip(),
-                                "father_name": new_father.strip(),
-                                "last_name": new_last.strip(),
+                                "first_name": (new_first or "").strip(),
+                                "father_name": (new_father or "").strip(),
+                                "last_name": (new_last or "").strip(),
                                 "full_name": combined_name,
                                 "code_name": final_code,
-                                "email": new_email.strip(),
-                                "phone": new_phone.strip(),
+                                "email": (new_email or "").strip(),
+                                "phone": (new_phone or "").strip(),
                                 "join_date": new_join.isoformat(),
                                 "role": new_role,
                                 "status": "Active",
@@ -1323,13 +1332,13 @@ elif page == "Admin Settings":
                     p_lead = st.selectbox("Assign Team Lead", options=list(name_to_id_map.keys()))
                     
                     if st.form_submit_button("Create Project", type="primary", use_container_width=True):
-                        if not p_code.strip() or not p_name.strip():
+                        if not (p_code or "").strip() or not (p_name or "").strip():
                             st.error("Project Code and Name are required.")
                         else:
                             new_project_payload = {
-                                "project_code": p_code.strip(),
-                                "project_name": p_name.strip(),
-                                "client_name": p_client.strip(),
+                                "project_code": (p_code or "").strip(),
+                                "project_name": (p_name or "").strip(),
+                                "client_name": (p_client or "").strip(),
                                 "team_lead": name_to_id_map[p_lead],
                                 "status": "Active",
                                 "current_stage": "Proposal",
@@ -1337,7 +1346,7 @@ elif page == "Admin Settings":
                             }
                             try:
                                 supabase.table("projects").insert(new_project_payload).execute()
-                                st.success(f"Project {p_code} created successfully.")
+                                st.success(f"Project {(p_code or '').strip()} created successfully.")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to create project: {e}")
@@ -1389,9 +1398,9 @@ elif page == "Admin Settings":
             with st.form("add_category_form"):
                 new_category = st.text_input("New Category Name")
                 if st.form_submit_button("Add Category", type="primary"):
-                    if new_category.strip() and new_category.strip() not in taxonomy_map:
+                    if (new_category or "").strip() and (new_category or "").strip() not in taxonomy_map:
                         try:
-                            supabase.table("task_taxonomy").insert({"category": new_category.strip(), "deliverables": []}).execute()
+                            supabase.table("task_taxonomy").insert({"category": (new_category or "").strip(), "deliverables": []}).execute()
                             st.success("Category added.")
                             st.rerun()
                         except Exception as e:
@@ -1409,8 +1418,8 @@ elif page == "Admin Settings":
                     
                     if st.form_submit_button("Save Deliverables", type="primary"):
                         final_delivs = active_delivs.copy()
-                        if new_deliv.strip() and new_deliv.strip() not in final_delivs:
-                            final_delivs.append(new_deliv.strip())
+                        if (new_deliv or "").strip() and (new_deliv or "").strip() not in final_delivs:
+                            final_delivs.append((new_deliv or "").strip())
                             
                         try:
                             supabase.table("task_taxonomy").update({"deliverables": final_delivs}).eq("category", selected_cat).execute()
