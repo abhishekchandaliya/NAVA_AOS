@@ -38,13 +38,16 @@ supabase = init_connection()
 
 # --- Global Context & Settings Fetch ---
 try:
-    team_response = supabase.table("team_members").select("id, full_name, role").execute()
+    # UPDATED: Fetching new HCM columns for team directory
+    team_response = supabase.table("team_members").select("id, full_name, role, status, email, phone, join_date").execute()
     settings_response = supabase.table("aos_settings").select("*").execute()
     taxonomy_response = supabase.table("task_taxonomy").select("*").execute()
+    projects_response_global = supabase.table("projects").select("*").execute()
     
     team_data = team_response.data
     settings_data = settings_response.data
     taxonomy_data = taxonomy_response.data
+    projects_data_global = projects_response_global.data
     
     name_to_id_map = {member['full_name']: member['id'] for member in team_data} if team_data else {}
     id_to_name_map = {member['id']: member['full_name'] for member in team_data} if team_data else {}
@@ -59,7 +62,7 @@ try:
     
 except Exception as e:
     st.error(f"Error loading global configuration: {e}")
-    team_data, global_activity_types, global_tags, global_designations, taxonomy_map = [], [], [], [], {}
+    team_data, global_activity_types, global_tags, global_designations, taxonomy_map, projects_data_global = [], [], [], [], {}, []
 
 if not team_data:
     st.warning("No team members found in the database. Please configure the database.")
@@ -99,7 +102,7 @@ selected_member_role = st.session_state.current_user["role"]
 
 # --- Sidebar Navigation & RBAC ---
 st.sidebar.title("AOS Navigation")
-st.sidebar.markdown(f"User: {selected_member_name}<br>Role: {selected_member_role}", unsafe_allow_html=True)
+st.sidebar.markdown(f"**User:** {selected_member_name}<br>**Role:** {selected_member_role}", unsafe_allow_html=True)
 st.sidebar.divider()
 
 nav_pages = []
@@ -122,12 +125,11 @@ if st.sidebar.button("Log Out", use_container_width=True):
 if page == "Principal Dashboard":
     
     try:
-        projects_response = supabase.table("projects").select("*").execute()
+        projects_data = projects_data_global
         tasks_response = supabase.table("tasks").select("*").execute()
         logs_response = supabase.table("team_logs").select("*").execute()
         ledger_response = supabase.table("project_ledger").select("*").execute() 
         
-        projects_data = projects_response.data
         tasks_data = tasks_response.data
         logs_data = logs_response.data
         ledger_data = ledger_response.data
@@ -146,7 +148,7 @@ if page == "Principal Dashboard":
             if proj_details:
                 lead_name = id_to_name_map.get(proj_details.get('team_lead'), "Unassigned")
                 st.title(f"Project Hub: {target_code}")
-                st.markdown(f"{proj_details.get('project_name', 'Unnamed')} | Lead: {lead_name} | Stage: {proj_details.get('current_stage', 'N/A')}")
+                st.markdown(f"**{proj_details.get('project_name', 'Unnamed')}** | Lead: {lead_name} | Stage: {proj_details.get('current_stage', 'N/A')}")
                 st.divider()
                 
                 st.subheader("Critical Path Summary")
@@ -163,7 +165,7 @@ if page == "Principal Dashboard":
                         cols = st.columns(len(summary_df))
                         for i, (_, row) in enumerate(summary_df.iterrows()):
                             with cols[i]:
-                                st.info(f"{row['category']}\n\n{row.get('content', '')}\n\n(Updated: {row['created_at'].strftime('%Y-%m-%d')})")
+                                st.info(f"**{row['category']}**\n\n{row.get('content', '')}\n\n(Updated: {row['created_at'].strftime('%Y-%m-%d')})")
                     else:
                         st.write("No updates logged for this project yet.")
                 else:
@@ -181,27 +183,27 @@ if page == "Principal Dashboard":
                             req_by = id_to_name_map.get(row.get('author_id'), 'Unknown')
                             
                             with st.form(key=f"triage_form_{row.get('id', idx)}"):
-                                st.markdown(f"{row.get('category', 'Uncategorized')} | {date_str} | Requested by: {req_by}")
-                                st.markdown(f"Action: {row.get('action_type', 'N/A')} | Details: {row.get('content', '')}")
+                                st.markdown(f"**{row.get('category', 'Uncategorized')}** | {date_str} | Requested by: {req_by}")
+                                st.markdown(f"**Action:** {row.get('action_type', 'N/A')} | **Details:** {row.get('content', '')}")
                                 st.divider()
                                 
                                 decision = st.radio("Executive Decision", options=[
-                                    "Resolve & Close", 
-                                    "Return to Team Lead (Needs Action)", 
-                                    "Schedule / Follow-up"
+                                    "Resolve and Close", 
+                                    "Return to Team Lead", 
+                                    "Schedule Follow-up"
                                 ])
                                 feedback = st.text_area("Principal Instructions / Feedback", placeholder="Enter specific directives for the team...")
                                 
                                 if st.form_submit_button("Submit Triage Decision", type="primary"):
                                     payload = {"principal_feedback": feedback.strip()}
                                     
-                                    if decision == "Resolve & Close":
+                                    if decision == "Resolve and Close":
                                         payload["is_principal_action_required"] = False
                                         payload["escalation_status"] = "Resolved"
-                                    elif decision == "Return to Team Lead (Needs Action)":
+                                    elif decision == "Return to Team Lead":
                                         payload["is_principal_action_required"] = False
                                         payload["escalation_status"] = "Pending Lead Action"
-                                    elif decision == "Schedule / Follow-up":
+                                    elif decision == "Schedule Follow-up":
                                         payload["is_principal_action_required"] = True
                                         payload["escalation_status"] = "Scheduled"
                                         
@@ -263,7 +265,7 @@ if page == "Principal Dashboard":
                                 
                                 c1, c2, c3 = st.columns([5, 3, 2])
                                 with c1:
-                                    st.write(f"{proj_code} - {proj_name} | {date_str}")
+                                    st.write(f"**{proj_code} - {proj_name}** | {date_str}")
                                 with c2:
                                     st.write(f"Lead: {req_by}")
                                 with c3:
@@ -395,8 +397,7 @@ elif page == "Assign Task":
     st.title("Assign Task")
     
     try:
-        projects_response = supabase.table("projects").select("project_code, project_name, team_lead").execute()
-        projects_data = projects_response.data
+        projects_data = projects_data_global
         
         project_options = {}
         if projects_data:
@@ -469,12 +470,11 @@ elif page == "Team Board":
     
     try:
         tasks_response = supabase.table("tasks").select("*").execute()
-        projects_response = supabase.table("projects").select("*").execute() 
         logs_response = supabase.table("team_logs").select("*").execute() 
         ledger_response = supabase.table("project_ledger").select("*").execute()
         
         tasks_data = tasks_response.data
-        projects_data = projects_response.data
+        projects_data = projects_data_global
         logs_data = logs_response.data
         ledger_data = ledger_response.data
         
@@ -539,7 +539,7 @@ elif page == "Team Board":
                         pending_feedback = [l for l in ledger_data if l.get('escalation_status') == 'Pending Lead Action' and l.get('project_code') in allowed_proj_codes]
                         
                         if pending_feedback:
-                            with st.expander("Principal Feedback / Action Required", expanded=True):
+                            with st.expander("Principal Feedback", expanded=True):
                                 for idx, fb in enumerate(pending_feedback):
                                     fb_date = pd.to_datetime(fb['created_at']).strftime('%b %d, %Y')
                                     fb_proj = fb['project_code']
@@ -551,7 +551,7 @@ elif page == "Team Board":
                                     if st.button("Acknowledge & Clear", key=f"ack_fb_{fb['id']}"):
                                         try:
                                             supabase.table("project_ledger").update({"escalation_status": "Resolved"}).eq("id", fb['id']).execute()
-                                            st.toast("Feedback Acknowledged")
+                                            st.success("Feedback Acknowledged")
                                             time.sleep(0.5)
                                             st.rerun()
                                         except Exception as e:
@@ -629,7 +629,7 @@ elif page == "Team Board":
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
-                                    st.toast("Project Updated & Logged Successfully")
+                                    st.success("Project Updated and Logged Successfully")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -667,7 +667,7 @@ elif page == "Team Board":
                 with col_new_tag:
                     st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                     new_inline_tag = st.text_input("New Tag", placeholder="Tag Name", label_visibility="collapsed")
-                    if st.button("Add Tag", use_container_width=True):
+                    if st.button("Add", use_container_width=True):
                         if new_inline_tag.strip() and new_inline_tag.strip() not in global_tags:
                             updated_tags = global_tags + [new_inline_tag.strip()]
                             try:
@@ -905,59 +905,128 @@ elif page == "Admin Settings":
                         except Exception as e:
                             st.error(f"Error: {e}")
 
-        # --- TAB 2: TEAM DIRECTORY ---
+        # --- TAB 2: TEAM DIRECTORY (HCM) ---
         with adm_tab2:
-            dir_col1, dir_col2 = st.columns(2)
+            st.subheader("Executive Headcount Dashboard")
+            df_team = pd.DataFrame(team_data)
             
-            with dir_col1:
-                with st.form("add_employee_form", clear_on_submit=True):
-                    st.write("Add New Employee")
-                    new_emp_name = st.text_input("Full Name")
-                    new_emp_role = st.selectbox("Designation", options=global_designations)
+            for col in ['status', 'email', 'phone', 'join_date']:
+                if col not in df_team.columns:
+                    df_team[col] = None
+            df_team['status'] = df_team['status'].fillna('Active')
+            
+            total_headcount = len(df_team)
+            active_employees = len(df_team[df_team['status'] == 'Active'])
+            on_leave_inactive = len(df_team[df_team['status'].isin(['Inactive', 'On Leave'])])
+            total_designations = df_team['role'].nunique()
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Headcount", total_headcount)
+            m2.metric("Active Employees", active_employees)
+            m3.metric("Total Designations", total_designations)
+            m4.metric("On Leave / Inactive", on_leave_inactive)
+            
+            st.divider()
+            st.subheader("Firm Roster & Resource Allocation")
+            
+            df_proj = pd.DataFrame(projects_data_global) if projects_data_global else pd.DataFrame(columns=['team_lead', 'status'])
+            if not df_proj.empty and 'team_lead' in df_proj.columns and 'status' in df_proj.columns:
+                active_projs = df_proj[df_proj['status'] == 'Active']
+                proj_counts = active_projs.groupby('team_lead').size().reset_index(name='Active Projects Assigned')
+            else:
+                proj_counts = pd.DataFrame(columns=['team_lead', 'Active Projects Assigned'])
+                
+            df_roster = pd.merge(df_team, proj_counts, left_on='id', right_on='team_lead', how='left')
+            df_roster['Active Projects Assigned'] = df_roster['Active Projects Assigned'].fillna(0).astype(int)
+            
+            roster_display_cols = {
+                'full_name': 'Name',
+                'role': 'Designation',
+                'status': 'Status',
+                'email': 'Email',
+                'phone': 'Phone',
+                'join_date': 'Join Date',
+                'Active Projects Assigned': 'Active Projects Assigned'
+            }
+            
+            df_roster_ui = df_roster[list(roster_display_cols.keys())].rename(columns=roster_display_cols)
+            st.dataframe(df_roster_ui, use_container_width=True, hide_index=True)
+            
+            st.divider()
+            col_onboard, col_offboard = st.columns(2)
+            
+            with col_onboard:
+                with st.form("onboard_form", clear_on_submit=True):
+                    st.write("Onboard New Employee")
+                    new_name = st.text_input("Full Name")
+                    new_email = st.text_input("Email")
+                    new_phone = st.text_input("Phone")
+                    new_join = st.date_input("Join Date")
+                    new_role = st.selectbox("Designation", options=global_designations)
                     
-                    if st.form_submit_button("Add Employee", type="primary"):
-                        if not new_emp_name.strip():
-                            st.error("Please provide a valid name.")
+                    if st.form_submit_button("Onboard Employee", type="primary"):
+                        if not new_name.strip():
+                            st.error("Name is required.")
                         else:
+                            payload = {
+                                "full_name": new_name.strip(),
+                                "email": new_email.strip(),
+                                "phone": new_phone.strip(),
+                                "join_date": new_join.isoformat(),
+                                "role": new_role,
+                                "status": "Active"
+                            }
                             try:
-                                supabase.table("team_members").insert({
-                                    "full_name": new_emp_name.strip(),
-                                    "role": new_emp_role
-                                }).execute()
-                                st.success(f"{new_emp_name} added successfully.")
+                                supabase.table("team_members").insert(payload).execute()
+                                st.success("Employee onboarded.")
+                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to add employee: {e}")
-
-            with dir_col2:
-                st.write("Edit or Remove Employee")
+                                st.error(f"Error: {e}")
+                                
+            with col_offboard:
+                st.write("Manage Existing Employee")
                 if team_data:
-                    emp_to_edit_name = st.selectbox("Select Employee", options=list(name_to_id_map.keys()), key="edit_emp_select")
-                    emp_to_edit_id = name_to_id_map.get(emp_to_edit_name)
-                    current_role = name_to_role_map.get(emp_to_edit_name, "Team Member")
+                    emp_options = list(name_to_id_map.keys())
+                    selected_emp = st.selectbox("Select Employee", options=emp_options, key="hcm_emp_select")
+                    emp_id = name_to_id_map[selected_emp]
+                    
+                    emp_record = next((e for e in team_data if e['id'] == emp_id), {})
+                    current_role = emp_record.get('role', global_designations[0] if global_designations else '')
+                    current_status = emp_record.get('status', 'Active')
                     
                     role_idx = global_designations.index(current_role) if current_role in global_designations else 0
-                    updated_role = st.selectbox("Update Designation", options=global_designations, index=role_idx)
+                    status_opts = ['Active', 'Inactive', 'On Leave']
+                    status_idx = status_opts.index(current_status) if current_status in status_opts else 0
                     
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("Update Role", use_container_width=True):
+                    with st.form("manage_employee_form"):
+                        upd_role = st.selectbox("Designation", options=global_designations, index=role_idx)
+                        upd_status = st.selectbox("Status", options=status_opts, index=status_idx)
+                        
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            btn_update = st.form_submit_button("Update Employee", type="primary", use_container_width=True)
+                        with c2:
+                            btn_delete = st.form_submit_button("Delete Record", use_container_width=True)
+                            
+                        if btn_update:
                             try:
-                                supabase.table("team_members").update({"role": updated_role}).eq("id", emp_to_edit_id).execute()
-                                st.success("Role updated.")
+                                supabase.table("team_members").update({"role": upd_role, "status": upd_status}).eq("id", emp_id).execute()
+                                st.success("Employee updated.")
+                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Update failed: {e}")
-                    with c2:
-                        if st.button("Remove User", type="primary", use_container_width=True):
+                                st.error(f"Error: {e}")
+                        if btn_delete:
                             try:
-                                supabase.table("team_members").delete().eq("id", emp_to_edit_id).execute()
-                                st.success(f"{emp_to_edit_name} removed.")
+                                supabase.table("team_members").delete().eq("id", emp_id).execute()
+                                st.success("Employee deleted.")
+                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Removal failed: {e}")
+                                st.error(f"Error: {e}")
                 else:
-                    st.write("No employees available to edit.")
+                    st.info("No employees to manage.")
 
         # --- TAB 3: MASTER PROJECT CONTROL ---
         with adm_tab3:
