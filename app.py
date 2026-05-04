@@ -21,17 +21,29 @@ if 'daily_log_cart' not in st.session_state:
 if 'grid_key' not in st.session_state: 
     st.session_state.grid_key = 0
 
-if 'admin_emp_id' not in st.session_state:
-    st.session_state.admin_emp_id = None
-
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
 def open_hub(project_code):
     st.session_state.selected_project_code = project_code
 
-def go_to_roster():
-    st.session_state.admin_emp_id = None
+# --- Algorithmic Code Name Engine ---
+def generate_code_name(first, father, last, existing_codes):
+    f_init = first.strip()[0].upper() if first.strip() else ""
+    m_init = father.strip()[0].upper() if father.strip() else ""
+    l_init = last.strip()[0].upper() if last.strip() else ""
+    
+    base_code = f"{f_init}{m_init}{l_init}"
+    if not base_code:
+        base_code = "EMP" 
+        
+    final_code = base_code
+    counter = 1
+    while final_code in existing_codes:
+        final_code = f"{base_code}-{counter}"
+        counter += 1
+        
+    return final_code
 
 # --- Database Connection ---
 @st.cache_resource
@@ -123,7 +135,6 @@ st.sidebar.divider()
 if st.sidebar.button("Log Out", use_container_width=True):
     st.session_state.current_user = None
     st.session_state.selected_project_code = None
-    st.session_state.admin_emp_id = None
     st.rerun()
 
 # ==========================================
@@ -854,9 +865,9 @@ elif page == "Team Board":
             
             with col_core:
                 st.write("Core Identifiers (Read-Only)")
-                st.info(f"Full Name: {my_data.get('full_name', 'N/A')}")
-                st.info(f"Code Name: {my_data.get('code_name', 'N/A')}")
-                st.info(f"Designation: {my_data.get('role', 'N/A')}")
+                st.info(f"Full Name: {my_data.get('full_name', 'Not Set')}")
+                st.info(f"Code Name: {my_data.get('code_name', 'Not Set')}")
+                st.info(f"Designation: {my_data.get('role', 'Not Set')}")
                 join_d = my_data.get('join_date')
                 st.info(f"Join Date: {join_d if join_d else 'Not Set'}")
             
@@ -871,8 +882,35 @@ elif page == "Team Board":
                     with st.form("my_profile_form"):
                         new_prof_data = {}
                         for field in global_custom_fields:
-                            current_val = prof_data.get(field, "")
-                            new_prof_data[field] = st.text_input(field, value=current_val)
+                            if field == 'Emergency Contact':
+                                st.write(f"**{field}**")
+                                ec_data = prof_data.get(field, {})
+                                if not isinstance(ec_data, dict): ec_data = {}
+                                ec1, ec2, ec3 = st.columns(3)
+                                ec_name = ec1.text_input("Name", value=ec_data.get('Name', ''), key=f"my_ec_n_{selected_member_id}")
+                                ec_rel = ec2.text_input("Relationship", value=ec_data.get('Relationship', ''), key=f"my_ec_r_{selected_member_id}")
+                                ec_num = ec3.text_input("Contact Number", value=ec_data.get('Contact Number', ''), key=f"my_ec_c_{selected_member_id}")
+                                new_prof_data[field] = {"Name": ec_name, "Relationship": ec_rel, "Contact Number": ec_num}
+                                
+                            elif field == 'Educational Background':
+                                st.write(f"**{field}**")
+                                ed_data = prof_data.get(field, [])
+                                if not isinstance(ed_data, list): ed_data = []
+                                df_ed = pd.DataFrame(ed_data, columns=['Degree', 'College/University', 'Passing Year'])
+                                edited_ed = st.data_editor(df_ed, num_rows="dynamic", key=f"my_ed_{selected_member_id}", use_container_width=True)
+                                new_prof_data[field] = edited_ed.fillna("").to_dict('records')
+                                
+                            elif field == 'Past Employment':
+                                st.write(f"**{field}**")
+                                pe_data = prof_data.get(field, [])
+                                if not isinstance(pe_data, list): pe_data = []
+                                df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From (MM/YYYY)', 'To (MM/YYYY)', 'Total Years'])
+                                edited_pe = st.data_editor(df_pe, num_rows="dynamic", key=f"my_pe_{selected_member_id}", use_container_width=True)
+                                new_prof_data[field] = edited_pe.fillna("").to_dict('records')
+                                
+                            else:
+                                current_val = prof_data.get(field, "")
+                                new_prof_data[field] = st.text_input(field, value=current_val, key=f"my_cf_{field}_{selected_member_id}")
                             
                         if st.form_submit_button("Submit Update Request", type="primary"):
                             try:
@@ -1003,7 +1041,7 @@ elif page == "Admin Settings":
                         upd_father = c_core2.text_input("Father's Name", value=emp_record.get('father_name', ''))
                         upd_last = c_core3.text_input("Last Name", value=emp_record.get('last_name', ''))
                         
-                        c_core4, c_core5 = st.columns(2)
+                        c_core4, c_core5, c_core6 = st.columns(3)
                         upd_email = c_core4.text_input("Email", value=emp_record.get('email', ''))
                         upd_phone = c_core5.text_input("Phone", value=emp_record.get('phone', ''))
                         
@@ -1011,38 +1049,96 @@ elif page == "Admin Settings":
                             j_date_val = datetime.strptime(emp_record.get('join_date', ''), "%Y-%m-%d").date()
                         except:
                             j_date_val = datetime.today().date()
-                        upd_join = st.date_input("Join Date", value=j_date_val)
+                        upd_join = c_core6.date_input("Join Date", value=j_date_val)
+                        
+                        c_core7, c_core8 = st.columns(2)
+                        current_r = emp_record.get('role')
+                        upd_role = c_core7.selectbox("Designation", options=global_designations, index=global_designations.index(current_r) if current_r in global_designations else 0)
+                        
+                        current_s = emp_record.get('status', 'Active')
+                        status_opts = ['Active', 'Inactive', 'On Leave']
+                        upd_status = c_core8.selectbox("Status", options=status_opts, index=status_opts.index(current_s) if current_s in status_opts else 0)
                         
                         st.divider()
                         st.write("Dynamic Profile Data")
                         new_prof_data = {}
                         if global_custom_fields:
                             for field in global_custom_fields:
-                                current_val = prof_data.get(field, "")
-                                new_prof_data[field] = st.text_input(field, value=current_val)
+                                if field == 'Emergency Contact':
+                                    st.write(f"**{field}**")
+                                    ec_data = prof_data.get(field, {})
+                                    if not isinstance(ec_data, dict): ec_data = {}
+                                    ec1, ec2, ec3 = st.columns(3)
+                                    ec_name = ec1.text_input("Name", value=ec_data.get('Name', ''), key=f"adm_ec_n_{emp_target_id}")
+                                    ec_rel = ec2.text_input("Relationship", value=ec_data.get('Relationship', ''), key=f"adm_ec_r_{emp_target_id}")
+                                    ec_num = ec3.text_input("Contact Number", value=ec_data.get('Contact Number', ''), key=f"adm_ec_c_{emp_target_id}")
+                                    new_prof_data[field] = {"Name": ec_name, "Relationship": ec_rel, "Contact Number": ec_num}
+                                    
+                                elif field == 'Educational Background':
+                                    st.write(f"**{field}**")
+                                    ed_data = prof_data.get(field, [])
+                                    if not isinstance(ed_data, list): ed_data = []
+                                    df_ed = pd.DataFrame(ed_data, columns=['Degree', 'College/University', 'Passing Year'])
+                                    edited_ed = st.data_editor(df_ed, num_rows="dynamic", key=f"adm_ed_{emp_target_id}", use_container_width=True)
+                                    new_prof_data[field] = edited_ed.fillna("").to_dict('records')
+                                    
+                                elif field == 'Past Employment':
+                                    st.write(f"**{field}**")
+                                    pe_data = prof_data.get(field, [])
+                                    if not isinstance(pe_data, list): pe_data = []
+                                    df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From (MM/YYYY)', 'To (MM/YYYY)', 'Total Years'])
+                                    edited_pe = st.data_editor(df_pe, num_rows="dynamic", key=f"adm_pe_{emp_target_id}", use_container_width=True)
+                                    new_prof_data[field] = edited_pe.fillna("").to_dict('records')
+                                    
+                                else:
+                                    current_val = prof_data.get(field, "")
+                                    new_prof_data[field] = st.text_input(field, value=current_val, key=f"adm_cf_{field}_{emp_target_id}")
                         else:
                             st.write("No custom fields configured.")
                             
-                        if st.form_submit_button("Force Save All Changes", type="primary"):
+                        st.divider()
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            submit_hub = st.form_submit_button("Force Save All Changes", type="primary", use_container_width=True)
+                        with col_btn2:
+                            submit_del = st.form_submit_button("Delete Employee Record", use_container_width=True)
+                            
+                        if submit_hub:
                             upd_full_name = f"{upd_first.strip()} {upd_last.strip()}".strip()
+                            existing_codes = [m.get('code_name') for m in team_data if m.get('code_name') and m.get('id') != emp_target_id]
+                            upd_code = generate_code_name(upd_first, upd_father, upd_last, existing_codes)
                             
                             payload = {
                                 "first_name": upd_first.strip(),
                                 "father_name": upd_father.strip(),
                                 "last_name": upd_last.strip(),
                                 "full_name": upd_full_name,
+                                "code_name": upd_code,
                                 "email": upd_email.strip(),
                                 "phone": upd_phone.strip(),
                                 "join_date": upd_join.isoformat(),
+                                "role": upd_role,
+                                "status": upd_status,
                                 "profile_data": new_prof_data
                             }
                             try:
                                 supabase.table("team_members").update(payload).eq("id", emp_target_id).execute()
                                 st.success("Employee record completely updated.")
+                                st.session_state['roster_grid'] = {'selection': {'rows': [], 'columns': []}}
                                 time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Failed to update employee: {e}")
+                                
+                        if submit_del:
+                            try:
+                                supabase.table("team_members").delete().eq("id", emp_target_id).execute()
+                                st.success("Employee record deleted.")
+                                st.session_state['roster_grid'] = {'selection': {'rows': [], 'columns': []}}
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete employee: {e}")
                 else:
                     st.error("Employee record not found.")
 
@@ -1124,6 +1220,7 @@ elif page == "Admin Settings":
                 df_roster['Active Projects Assigned'] = df_roster['Active Projects Assigned'].fillna(0).astype(int)
                 
                 roster_display_cols = {
+                    'id': 'ID',
                     'full_name': 'Name',
                     'code_name': 'Code',
                     'role': 'Designation',
@@ -1135,114 +1232,62 @@ elif page == "Admin Settings":
                 }
                 
                 df_roster_ui = df_roster[list(roster_display_cols.keys())].rename(columns=roster_display_cols)
-                st.dataframe(df_roster_ui, use_container_width=True, hide_index=True)
+                
+                st.dataframe(
+                    df_roster_ui.drop(columns=['ID']), 
+                    use_container_width=True, 
+                    hide_index=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="roster_grid"
+                )
+                
+                if 'roster_grid' in st.session_state and len(st.session_state.roster_grid['selection']['rows']) > 0:
+                    selected_idx = st.session_state.roster_grid['selection']['rows'][0]
+                    st.session_state.admin_emp_id = df_roster_ui.iloc[selected_idx]['ID']
+                    st.rerun()
                 
                 st.divider()
-                col_onboard, col_offboard = st.columns(2)
-                
-                with col_onboard:
-                    with st.form("onboard_form", clear_on_submit=True):
-                        st.write("Onboard New Employee")
-                        new_first = st.text_input("First Name")
-                        new_father = st.text_input("Father's Name")
-                        new_last = st.text_input("Last Name")
-                        
-                        new_email = st.text_input("Email")
-                        new_phone = st.text_input("Phone")
-                        new_join = st.date_input("Join Date")
-                        new_role = st.selectbox("Designation", options=global_designations)
-                        
-                        if st.form_submit_button("Onboard Employee", type="primary"):
-                            if not new_first.strip() or not new_last.strip():
-                                st.error("First and Last name are required.")
-                            else:
-                                # Algorithmic Code Name Generation
-                                f_initial = new_first.strip()[0].upper()
-                                m_initial = new_father.strip()[0].upper() if new_father.strip() else ""
-                                l_initial = new_last.strip()[0].upper()
-                                base_code = f"{f_initial}{m_initial}{l_initial}"
+                st.subheader("Onboard New Employee")
+                with st.form("onboard_form", clear_on_submit=True):
+                    new_first = st.text_input("First Name")
+                    new_father = st.text_input("Father's Name")
+                    new_last = st.text_input("Last Name")
+                    
+                    new_email = st.text_input("Email")
+                    new_phone = st.text_input("Phone")
+                    new_join = st.date_input("Join Date")
+                    new_role = st.selectbox("Designation", options=global_designations)
+                    
+                    if st.form_submit_button("Onboard Employee", type="primary"):
+                        if not new_first.strip() or not new_last.strip():
+                            st.error("First and Last name are required.")
+                        else:
+                            existing_codes = [m.get('code_name') for m in team_data if m.get('code_name')]
+                            final_code = generate_code_name(new_first, new_father, new_last, existing_codes)
                                 
-                                # Collision Check
-                                existing_codes = [m.get('code_name') for m in team_data if m.get('code_name')]
-                                final_code = base_code
-                                counter = 1
-                                while final_code in existing_codes:
-                                    final_code = f"{base_code}-{counter}"
-                                    counter += 1
-                                    
-                                combined_name = f"{new_first.strip()} {new_last.strip()}"
-                                
-                                payload = {
-                                    "first_name": new_first.strip(),
-                                    "father_name": new_father.strip(),
-                                    "last_name": new_last.strip(),
-                                    "full_name": combined_name,
-                                    "code_name": final_code,
-                                    "email": new_email.strip(),
-                                    "phone": new_phone.strip(),
-                                    "join_date": new_join.isoformat(),
-                                    "role": new_role,
-                                    "status": "Active",
-                                    "profile_data": {}
-                                }
-                                try:
-                                    supabase.table("team_members").insert(payload).execute()
-                                    st.success(f"Employee {combined_name} onboarded with code {final_code}.")
-                                    time.sleep(1)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                                    
-                with col_offboard:
-                    st.write("Manage Existing Employee")
-                    if team_data:
-                        emp_options = list(name_to_id_map.keys())
-                        selected_emp = st.selectbox("Select Employee", options=emp_options, key="hcm_emp_select")
-                        emp_id = name_to_id_map[selected_emp]
-                        
-                        emp_record = next((e for e in team_data if e['id'] == emp_id), {})
-                        current_role = emp_record.get('role', global_designations[0] if global_designations else '')
-                        current_status = emp_record.get('status', 'Active')
-                        
-                        role_idx = global_designations.index(current_role) if current_role in global_designations else 0
-                        status_opts = ['Active', 'Inactive', 'On Leave']
-                        status_idx = status_opts.index(current_status) if current_status in status_opts else 0
-                        
-                        with st.form("manage_employee_form"):
-                            upd_role = st.selectbox("Designation", options=global_designations, index=role_idx)
-                            upd_status = st.selectbox("Status", options=status_opts, index=status_idx)
+                            combined_name = f"{new_first.strip()} {new_last.strip()}"
                             
-                            btn_manage_prof = st.form_submit_button("Manage Dynamic Profile", type="secondary", use_container_width=True)
-                            
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                btn_update = st.form_submit_button("Update Core Data", type="primary", use_container_width=True)
-                            with c2:
-                                btn_delete = st.form_submit_button("Delete Record", use_container_width=True)
-                                
-                            if btn_manage_prof:
-                                st.session_state.admin_emp_id = emp_id
+                            payload = {
+                                "first_name": new_first.strip(),
+                                "father_name": new_father.strip(),
+                                "last_name": new_last.strip(),
+                                "full_name": combined_name,
+                                "code_name": final_code,
+                                "email": new_email.strip(),
+                                "phone": new_phone.strip(),
+                                "join_date": new_join.isoformat(),
+                                "role": new_role,
+                                "status": "Active",
+                                "profile_data": {}
+                            }
+                            try:
+                                supabase.table("team_members").insert(payload).execute()
+                                st.success(f"Employee {combined_name} onboarded with code {final_code}.")
+                                time.sleep(1)
                                 st.rerun()
-                                
-                            if btn_update:
-                                try:
-                                    supabase.table("team_members").update({"role": upd_role, "status": upd_status}).eq("id", emp_id).execute()
-                                    st.success("Employee core data updated.")
-                                    time.sleep(0.5)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                                    
-                            if btn_delete:
-                                try:
-                                    supabase.table("team_members").delete().eq("id", emp_id).execute()
-                                    st.success("Employee deleted.")
-                                    time.sleep(0.5)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
-                    else:
-                        st.info("No employees to manage.")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
 
         # --- TAB 3: MASTER PROJECT CONTROL ---
         with adm_tab3:
