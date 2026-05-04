@@ -21,11 +21,18 @@ if 'daily_log_cart' not in st.session_state:
 if 'grid_key' not in st.session_state: 
     st.session_state.grid_key = 0
 
+# NEW: State for Employee Drill-Down
+if 'admin_emp_id' not in st.session_state:
+    st.session_state.admin_emp_id = None
+
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
 def open_hub(project_code):
     st.session_state.selected_project_code = project_code
+
+def go_to_roster():
+    st.session_state.admin_emp_id = None
 
 # --- Database Connection ---
 @st.cache_resource
@@ -38,8 +45,7 @@ supabase = init_connection()
 
 # --- Global Context & Settings Fetch ---
 try:
-    # UPDATED: Fetching new HCM columns for team directory
-    team_response = supabase.table("team_members").select("id, full_name, role, status, email, phone, join_date").execute()
+    team_response = supabase.table("team_members").select("id, full_name, role, status, email, phone, join_date, profile_data").execute()
     settings_response = supabase.table("aos_settings").select("*").execute()
     taxonomy_response = supabase.table("task_taxonomy").select("*").execute()
     projects_response_global = supabase.table("projects").select("*").execute()
@@ -57,12 +63,13 @@ try:
     global_activity_types = settings_map.get("activity_types", [])
     global_tags = settings_map.get("tags", [])
     global_designations = settings_map.get("designations", ["Principal Architect", "Manager", "Team Member"])
+    global_custom_fields = settings_map.get("custom_profile_fields", []) # NEW: Dynamic HR Fields
     
     taxonomy_map = {row['category']: row.get('deliverables', []) for row in taxonomy_data} if taxonomy_data else {}
     
 except Exception as e:
     st.error(f"Error loading global configuration: {e}")
-    team_data, global_activity_types, global_tags, global_designations, taxonomy_map, projects_data_global = [], [], [], [], {}, []
+    team_data, global_activity_types, global_tags, global_designations, global_custom_fields, taxonomy_map, projects_data_global = [], [], [], [], [], {}, []
 
 if not team_data:
     st.warning("No team members found in the database. Please configure the database.")
@@ -117,6 +124,7 @@ st.sidebar.divider()
 if st.sidebar.button("Log Out", use_container_width=True):
     st.session_state.current_user = None
     st.session_state.selected_project_code = None
+    st.session_state.admin_emp_id = None
     st.rerun()
 
 # ==========================================
@@ -480,7 +488,7 @@ elif page == "Team Board":
         
         project_map = {p['project_code']: p.get('project_name', 'Unknown') for p in projects_data} if projects_data else {}
         
-        tab1, tab2, tab3 = st.tabs(["My Tasks", "Update Projects", "Time Tracker & Analytics"])
+        tab1, tab2, tab3, tab4 = st.tabs(["My Tasks", "Update Projects", "Time Tracker", "My Profile"])
         
         # === TAB 1: MY TASKS ===
         with tab1:
@@ -548,10 +556,10 @@ elif page == "Team Board":
                                     st.write(f"{fb_proj} | {fb_date}")
                                     st.write(f"Principal Feedback: {fb_text}")
                                     
-                                    if st.button("Acknowledge & Clear", key=f"ack_fb_{fb['id']}"):
+                                    if st.button("Acknowledge and Clear", key=f"ack_fb_{fb['id']}"):
                                         try:
                                             supabase.table("project_ledger").update({"escalation_status": "Resolved"}).eq("id", fb['id']).execute()
-                                            st.success("Feedback Acknowledged")
+                                            st.toast("Feedback Acknowledged")
                                             time.sleep(0.5)
                                             st.rerun()
                                         except Exception as e:
@@ -629,7 +637,7 @@ elif page == "Team Board":
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
-                                    st.success("Project Updated and Logged Successfully")
+                                    st.toast("Project Updated and Logged Successfully")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -836,6 +844,42 @@ elif page == "Team Board":
                 else:
                     st.write("Please select a valid start and end date to view history.")
 
+        # === TAB 4: MY PROFILE (SELF-SERVICE) ===
+        with tab4:
+            st.subheader("My Profile")
+            
+            my_data = next((m for m in team_data if m['id'] == selected_member_id), {})
+            prof_data = my_data.get('profile_data') or {}
+            
+            col_core, col_dyn = st.columns(2)
+            
+            with col_core:
+                st.write("Core Identifiers (Read-Only)")
+                st.info(f"Full Name: {my_data.get('full_name', 'N/A')}")
+                st.info(f"Designation: {my_data.get('role', 'N/A')}")
+                join_d = my_data.get('join_date')
+                st.info(f"Join Date: {join_d if join_d else 'Not Set'}")
+            
+            with col_dyn:
+                st.write("Update Dynamic Details")
+                if not global_custom_fields:
+                    st.write("No dynamic profile fields have been configured by the Administrator.")
+                else:
+                    with st.form("my_profile_form"):
+                        new_prof_data = {}
+                        for field in global_custom_fields:
+                            current_val = prof_data.get(field, "")
+                            new_prof_data[field] = st.text_input(field, value=current_val)
+                            
+                        if st.form_submit_button("Update My Profile", type="primary"):
+                            try:
+                                supabase.table("team_members").update({"profile_data": new_prof_data}).eq("id", selected_member_id).execute()
+                                st.success("Profile updated successfully.")
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update profile: {e}")
+
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
 
@@ -853,7 +897,7 @@ elif page == "Admin Settings":
         
         # --- TAB 1: GLOBAL CONFIGURATIONS ---
         with adm_tab1:
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 with st.form("activity_settings_form"):
                     st.write("Activity Types")
@@ -904,129 +948,202 @@ elif page == "Admin Settings":
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
+                            
+            with col4:
+                with st.form("custom_fields_settings_form"):
+                    st.write("Custom Profile Fields")
+                    active_fields = st.multiselect("Current Fields", options=global_custom_fields, default=global_custom_fields)
+                    new_field = st.text_input("Add New Field")
+                    
+                    if st.form_submit_button("Save Fields", type="primary"):
+                        final_fields = active_fields.copy()
+                        if new_field.strip() and new_field.strip() not in final_fields:
+                            final_fields.append(new_field.strip())
+                        try:
+                            supabase.table("aos_settings").upsert({"category": "custom_profile_fields", "options": final_fields}).execute()
+                            st.success("Updated")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
         # --- TAB 2: TEAM DIRECTORY (HCM) ---
         with adm_tab2:
-            st.subheader("Executive Headcount Dashboard")
-            df_team = pd.DataFrame(team_data)
-            
-            for col in ['status', 'email', 'phone', 'join_date']:
-                if col not in df_team.columns:
-                    df_team[col] = None
-            df_team['status'] = df_team['status'].fillna('Active')
-            
-            total_headcount = len(df_team)
-            active_employees = len(df_team[df_team['status'] == 'Active'])
-            on_leave_inactive = len(df_team[df_team['status'].isin(['Inactive', 'On Leave'])])
-            total_designations = df_team['role'].nunique()
-            
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Total Headcount", total_headcount)
-            m2.metric("Active Employees", active_employees)
-            m3.metric("Total Designations", total_designations)
-            m4.metric("On Leave / Inactive", on_leave_inactive)
-            
-            st.divider()
-            st.subheader("Firm Roster & Resource Allocation")
-            
-            df_proj = pd.DataFrame(projects_data_global) if projects_data_global else pd.DataFrame(columns=['team_lead', 'status'])
-            if not df_proj.empty and 'team_lead' in df_proj.columns and 'status' in df_proj.columns:
-                active_projs = df_proj[df_proj['status'] == 'Active']
-                proj_counts = active_projs.groupby('team_lead').size().reset_index(name='Active Projects Assigned')
-            else:
-                proj_counts = pd.DataFrame(columns=['team_lead', 'Active Projects Assigned'])
+            if st.session_state.admin_emp_id:
+                # STATE 2: EMPLOYEE HUB DRILL-DOWN
+                st.button("Back to Roster", on_click=go_to_roster)
                 
-            df_roster = pd.merge(df_team, proj_counts, left_on='id', right_on='team_lead', how='left')
-            df_roster['Active Projects Assigned'] = df_roster['Active Projects Assigned'].fillna(0).astype(int)
-            
-            roster_display_cols = {
-                'full_name': 'Name',
-                'role': 'Designation',
-                'status': 'Status',
-                'email': 'Email',
-                'phone': 'Phone',
-                'join_date': 'Join Date',
-                'Active Projects Assigned': 'Active Projects Assigned'
-            }
-            
-            df_roster_ui = df_roster[list(roster_display_cols.keys())].rename(columns=roster_display_cols)
-            st.dataframe(df_roster_ui, use_container_width=True, hide_index=True)
-            
-            st.divider()
-            col_onboard, col_offboard = st.columns(2)
-            
-            with col_onboard:
-                with st.form("onboard_form", clear_on_submit=True):
-                    st.write("Onboard New Employee")
-                    new_name = st.text_input("Full Name")
-                    new_email = st.text_input("Email")
-                    new_phone = st.text_input("Phone")
-                    new_join = st.date_input("Join Date")
-                    new_role = st.selectbox("Designation", options=global_designations)
+                emp_target_id = st.session_state.admin_emp_id
+                emp_record = next((e for e in team_data if e['id'] == emp_target_id), None)
+                
+                if emp_record:
+                    st.title(f"Employee Hub: {emp_record['full_name']}")
+                    st.divider()
                     
-                    if st.form_submit_button("Onboard Employee", type="primary"):
-                        if not new_name.strip():
-                            st.error("Name is required.")
-                        else:
-                            payload = {
-                                "full_name": new_name.strip(),
-                                "email": new_email.strip(),
-                                "phone": new_phone.strip(),
-                                "join_date": new_join.isoformat(),
-                                "role": new_role,
-                                "status": "Active"
-                            }
-                            try:
-                                supabase.table("team_members").insert(payload).execute()
-                                st.success("Employee onboarded.")
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-                                
-            with col_offboard:
-                st.write("Manage Existing Employee")
-                if team_data:
-                    emp_options = list(name_to_id_map.keys())
-                    selected_emp = st.selectbox("Select Employee", options=emp_options, key="hcm_emp_select")
-                    emp_id = name_to_id_map[selected_emp]
-                    
-                    emp_record = next((e for e in team_data if e['id'] == emp_id), {})
-                    current_role = emp_record.get('role', global_designations[0] if global_designations else '')
-                    current_status = emp_record.get('status', 'Active')
-                    
-                    role_idx = global_designations.index(current_role) if current_role in global_designations else 0
-                    status_opts = ['Active', 'Inactive', 'On Leave']
-                    status_idx = status_opts.index(current_status) if current_status in status_opts else 0
-                    
-                    with st.form("manage_employee_form"):
-                        upd_role = st.selectbox("Designation", options=global_designations, index=role_idx)
-                        upd_status = st.selectbox("Status", options=status_opts, index=status_idx)
+                    # Calculate Active Projects
+                    active_proj_count = 0
+                    if projects_data_global:
+                        active_proj_count = len([p for p in projects_data_global if p.get('team_lead') == emp_target_id and p.get('status') == 'Active'])
                         
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            btn_update = st.form_submit_button("Update Employee", type="primary", use_container_width=True)
-                        with c2:
-                            btn_delete = st.form_submit_button("Delete Record", use_container_width=True)
-                            
-                        if btn_update:
-                            try:
-                                supabase.table("team_members").update({"role": upd_role, "status": upd_status}).eq("id", emp_id).execute()
-                                st.success("Employee updated.")
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
-                        if btn_delete:
-                            try:
-                                supabase.table("team_members").delete().eq("id", emp_id).execute()
-                                st.success("Employee deleted.")
-                                time.sleep(0.5)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
+                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                    metric_col1.metric("Designation", emp_record.get('role', 'N/A'))
+                    metric_col2.metric("Join Date", emp_record.get('join_date', 'Not Set'))
+                    metric_col3.metric("Active Projects Assigned", active_proj_count)
+                    
+                    st.divider()
+                    st.subheader("Manage Dynamic Profile Data")
+                    
+                    if not global_custom_fields:
+                        st.write("No dynamic profile fields have been configured. Add them in Global Configurations.")
+                    else:
+                        prof_data = emp_record.get('profile_data') or {}
+                        
+                        with st.form("admin_edit_profile_form"):
+                            new_prof_data = {}
+                            for field in global_custom_fields:
+                                current_val = prof_data.get(field, "")
+                                new_prof_data[field] = st.text_input(field, value=current_val)
+                                
+                            if st.form_submit_button("Save Profile Data", type="primary"):
+                                try:
+                                    supabase.table("team_members").update({"profile_data": new_prof_data}).eq("id", emp_target_id).execute()
+                                    st.success("Employee profile updated successfully.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to update profile: {e}")
                 else:
-                    st.info("No employees to manage.")
+                    st.error("Employee record not found.")
+
+            else:
+                # STATE 1: MASTER ROSTER
+                st.subheader("Executive Headcount Dashboard")
+                df_team = pd.DataFrame(team_data)
+                
+                for col in ['status', 'email', 'phone', 'join_date']:
+                    if col not in df_team.columns:
+                        df_team[col] = None
+                df_team['status'] = df_team['status'].fillna('Active')
+                
+                total_headcount = len(df_team)
+                active_employees = len(df_team[df_team['status'] == 'Active'])
+                on_leave_inactive = len(df_team[df_team['status'].isin(['Inactive', 'On Leave'])])
+                total_designations = df_team['role'].nunique()
+                
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Headcount", total_headcount)
+                m2.metric("Active Employees", active_employees)
+                m3.metric("Total Designations", total_designations)
+                m4.metric("On Leave / Inactive", on_leave_inactive)
+                
+                st.divider()
+                st.subheader("Firm Roster & Resource Allocation")
+                
+                df_proj = pd.DataFrame(projects_data_global) if projects_data_global else pd.DataFrame(columns=['team_lead', 'status'])
+                if not df_proj.empty and 'team_lead' in df_proj.columns and 'status' in df_proj.columns:
+                    active_projs = df_proj[df_proj['status'] == 'Active']
+                    proj_counts = active_projs.groupby('team_lead').size().reset_index(name='Active Projects Assigned')
+                else:
+                    proj_counts = pd.DataFrame(columns=['team_lead', 'Active Projects Assigned'])
+                    
+                df_roster = pd.merge(df_team, proj_counts, left_on='id', right_on='team_lead', how='left')
+                df_roster['Active Projects Assigned'] = df_roster['Active Projects Assigned'].fillna(0).astype(int)
+                
+                roster_display_cols = {
+                    'full_name': 'Name',
+                    'role': 'Designation',
+                    'status': 'Status',
+                    'email': 'Email',
+                    'phone': 'Phone',
+                    'join_date': 'Join Date',
+                    'Active Projects Assigned': 'Active Projects Assigned'
+                }
+                
+                df_roster_ui = df_roster[list(roster_display_cols.keys())].rename(columns=roster_display_cols)
+                st.dataframe(df_roster_ui, use_container_width=True, hide_index=True)
+                
+                st.divider()
+                col_onboard, col_offboard = st.columns(2)
+                
+                with col_onboard:
+                    with st.form("onboard_form", clear_on_submit=True):
+                        st.write("Onboard New Employee")
+                        new_name = st.text_input("Full Name")
+                        new_email = st.text_input("Email")
+                        new_phone = st.text_input("Phone")
+                        new_join = st.date_input("Join Date")
+                        new_role = st.selectbox("Designation", options=global_designations)
+                        
+                        if st.form_submit_button("Onboard Employee", type="primary"):
+                            if not new_name.strip():
+                                st.error("Name is required.")
+                            else:
+                                payload = {
+                                    "full_name": new_name.strip(),
+                                    "email": new_email.strip(),
+                                    "phone": new_phone.strip(),
+                                    "join_date": new_join.isoformat(),
+                                    "role": new_role,
+                                    "status": "Active",
+                                    "profile_data": {}
+                                }
+                                try:
+                                    supabase.table("team_members").insert(payload).execute()
+                                    st.success("Employee onboarded.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                                    
+                with col_offboard:
+                    st.write("Manage Existing Employee")
+                    if team_data:
+                        emp_options = list(name_to_id_map.keys())
+                        selected_emp = st.selectbox("Select Employee", options=emp_options, key="hcm_emp_select")
+                        emp_id = name_to_id_map[selected_emp]
+                        
+                        emp_record = next((e for e in team_data if e['id'] == emp_id), {})
+                        current_role = emp_record.get('role', global_designations[0] if global_designations else '')
+                        current_status = emp_record.get('status', 'Active')
+                        
+                        role_idx = global_designations.index(current_role) if current_role in global_designations else 0
+                        status_opts = ['Active', 'Inactive', 'On Leave']
+                        status_idx = status_opts.index(current_status) if current_status in status_opts else 0
+                        
+                        with st.form("manage_employee_form"):
+                            upd_role = st.selectbox("Designation", options=global_designations, index=role_idx)
+                            upd_status = st.selectbox("Status", options=status_opts, index=status_idx)
+                            
+                            btn_manage_prof = st.form_submit_button("Manage Dynamic Profile", type="secondary", use_container_width=True)
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                btn_update = st.form_submit_button("Update Core Data", type="primary", use_container_width=True)
+                            with c2:
+                                btn_delete = st.form_submit_button("Delete Record", use_container_width=True)
+                                
+                            if btn_manage_prof:
+                                st.session_state.admin_emp_id = emp_id
+                                st.rerun()
+                                
+                            if btn_update:
+                                try:
+                                    supabase.table("team_members").update({"role": upd_role, "status": upd_status}).eq("id", emp_id).execute()
+                                    st.success("Employee updated.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                                    
+                            if btn_delete:
+                                try:
+                                    supabase.table("team_members").delete().eq("id", emp_id).execute()
+                                    st.success("Employee deleted.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                    else:
+                        st.info("No employees to manage.")
 
         # --- TAB 3: MASTER PROJECT CONTROL ---
         with adm_tab3:
