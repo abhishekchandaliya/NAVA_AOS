@@ -21,7 +21,6 @@ if 'daily_log_cart' not in st.session_state:
 if 'grid_key' not in st.session_state: 
     st.session_state.grid_key = 0
 
-# NEW: State for Employee Drill-Down
 if 'admin_emp_id' not in st.session_state:
     st.session_state.admin_emp_id = None
 
@@ -45,7 +44,7 @@ supabase = init_connection()
 
 # --- Global Context & Settings Fetch ---
 try:
-    team_response = supabase.table("team_members").select("id, full_name, role, status, email, phone, join_date, profile_data").execute()
+    team_response = supabase.table("team_members").select("*").execute()
     settings_response = supabase.table("aos_settings").select("*").execute()
     taxonomy_response = supabase.table("task_taxonomy").select("*").execute()
     projects_response_global = supabase.table("projects").select("*").execute()
@@ -63,7 +62,7 @@ try:
     global_activity_types = settings_map.get("activity_types", [])
     global_tags = settings_map.get("tags", [])
     global_designations = settings_map.get("designations", ["Principal Architect", "Manager", "Team Member"])
-    global_custom_fields = settings_map.get("custom_profile_fields", []) # NEW: Dynamic HR Fields
+    global_custom_fields = settings_map.get("custom_profile_fields", [])
     
     taxonomy_map = {row['category']: row.get('deliverables', []) for row in taxonomy_data} if taxonomy_data else {}
     
@@ -844,7 +843,7 @@ elif page == "Team Board":
                 else:
                     st.write("Please select a valid start and end date to view history.")
 
-        # === TAB 4: MY PROFILE (SELF-SERVICE) ===
+        # === TAB 4: MY PROFILE (SELF-SERVICE WITH APPROVAL GATE) ===
         with tab4:
             st.subheader("My Profile")
             
@@ -856,6 +855,7 @@ elif page == "Team Board":
             with col_core:
                 st.write("Core Identifiers (Read-Only)")
                 st.info(f"Full Name: {my_data.get('full_name', 'N/A')}")
+                st.info(f"Code Name: {my_data.get('code_name', 'N/A')}")
                 st.info(f"Designation: {my_data.get('role', 'N/A')}")
                 join_d = my_data.get('join_date')
                 st.info(f"Join Date: {join_d if join_d else 'Not Set'}")
@@ -865,20 +865,23 @@ elif page == "Team Board":
                 if not global_custom_fields:
                     st.write("No dynamic profile fields have been configured by the Administrator.")
                 else:
+                    if my_data.get('pending_profile_data'):
+                        st.warning("You have a profile update currently pending Admin approval.")
+                        
                     with st.form("my_profile_form"):
                         new_prof_data = {}
                         for field in global_custom_fields:
                             current_val = prof_data.get(field, "")
                             new_prof_data[field] = st.text_input(field, value=current_val)
                             
-                        if st.form_submit_button("Update My Profile", type="primary"):
+                        if st.form_submit_button("Submit Update Request", type="primary"):
                             try:
-                                supabase.table("team_members").update({"profile_data": new_prof_data}).eq("id", selected_member_id).execute()
-                                st.success("Profile updated successfully.")
-                                time.sleep(0.5)
+                                supabase.table("team_members").update({"pending_profile_data": new_prof_data}).eq("id", selected_member_id).execute()
+                                st.success("Profile update submitted. Pending Admin approval.")
+                                time.sleep(1)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to update profile: {e}")
+                                st.error(f"Failed to submit profile update: {e}")
 
     except Exception as e:
         st.error(f"Error loading Team Board data: {e}")
@@ -969,7 +972,7 @@ elif page == "Admin Settings":
         # --- TAB 2: TEAM DIRECTORY (HCM) ---
         with adm_tab2:
             if st.session_state.admin_emp_id:
-                # STATE 2: EMPLOYEE HUB DRILL-DOWN
+                # STATE 2: EMPLOYEE HUB DRILL-DOWN WITH TOTAL EDIT CONTROL
                 st.button("Back to Roster", on_click=go_to_roster)
                 
                 emp_target_id = st.session_state.admin_emp_id
@@ -979,43 +982,115 @@ elif page == "Admin Settings":
                     st.title(f"Employee Hub: {emp_record['full_name']}")
                     st.divider()
                     
-                    # Calculate Active Projects
                     active_proj_count = 0
                     if projects_data_global:
                         active_proj_count = len([p for p in projects_data_global if p.get('team_lead') == emp_target_id and p.get('status') == 'Active'])
                         
                     metric_col1, metric_col2, metric_col3 = st.columns(3)
                     metric_col1.metric("Designation", emp_record.get('role', 'N/A'))
-                    metric_col2.metric("Join Date", emp_record.get('join_date', 'Not Set'))
+                    metric_col2.metric("Code Name", emp_record.get('code_name', 'N/A'))
                     metric_col3.metric("Active Projects Assigned", active_proj_count)
                     
                     st.divider()
-                    st.subheader("Manage Dynamic Profile Data")
+                    st.subheader("Manage Employee Data")
                     
-                    if not global_custom_fields:
-                        st.write("No dynamic profile fields have been configured. Add them in Global Configurations.")
-                    else:
-                        prof_data = emp_record.get('profile_data') or {}
+                    prof_data = emp_record.get('profile_data') or {}
+                    
+                    with st.form("admin_total_edit_form"):
+                        st.write("Core Identification")
+                        c_core1, c_core2, c_core3 = st.columns(3)
+                        upd_first = c_core1.text_input("First Name", value=emp_record.get('first_name', ''))
+                        upd_father = c_core2.text_input("Father's Name", value=emp_record.get('father_name', ''))
+                        upd_last = c_core3.text_input("Last Name", value=emp_record.get('last_name', ''))
                         
-                        with st.form("admin_edit_profile_form"):
-                            new_prof_data = {}
+                        c_core4, c_core5 = st.columns(2)
+                        upd_email = c_core4.text_input("Email", value=emp_record.get('email', ''))
+                        upd_phone = c_core5.text_input("Phone", value=emp_record.get('phone', ''))
+                        
+                        try:
+                            j_date_val = datetime.strptime(emp_record.get('join_date', ''), "%Y-%m-%d").date()
+                        except:
+                            j_date_val = datetime.today().date()
+                        upd_join = st.date_input("Join Date", value=j_date_val)
+                        
+                        st.divider()
+                        st.write("Dynamic Profile Data")
+                        new_prof_data = {}
+                        if global_custom_fields:
                             for field in global_custom_fields:
                                 current_val = prof_data.get(field, "")
                                 new_prof_data[field] = st.text_input(field, value=current_val)
-                                
-                            if st.form_submit_button("Save Profile Data", type="primary"):
-                                try:
-                                    supabase.table("team_members").update({"profile_data": new_prof_data}).eq("id", emp_target_id).execute()
-                                    st.success("Employee profile updated successfully.")
-                                    time.sleep(0.5)
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to update profile: {e}")
+                        else:
+                            st.write("No custom fields configured.")
+                            
+                        if st.form_submit_button("Force Save All Changes", type="primary"):
+                            upd_full_name = f"{upd_first.strip()} {upd_last.strip()}".strip()
+                            
+                            payload = {
+                                "first_name": upd_first.strip(),
+                                "father_name": upd_father.strip(),
+                                "last_name": upd_last.strip(),
+                                "full_name": upd_full_name,
+                                "email": upd_email.strip(),
+                                "phone": upd_phone.strip(),
+                                "join_date": upd_join.isoformat(),
+                                "profile_data": new_prof_data
+                            }
+                            try:
+                                supabase.table("team_members").update(payload).eq("id", emp_target_id).execute()
+                                st.success("Employee record completely updated.")
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update employee: {e}")
                 else:
                     st.error("Employee record not found.")
 
             else:
-                # STATE 1: MASTER ROSTER
+                # STATE 1: MASTER ROSTER & HR INBOX
+                
+                # --- HR APPROVALS INBOX ---
+                pending_approvals = [m for m in team_data if m.get('pending_profile_data')]
+                if pending_approvals:
+                    st.subheader("HR Approvals Inbox")
+                    for emp in pending_approvals:
+                        with st.expander(f"Pending Profile Update: {emp['full_name']}", expanded=True):
+                            st.write("Requested Changes")
+                            current_data = emp.get('profile_data', {})
+                            pending_data = emp.get('pending_profile_data', {})
+                            
+                            for field in global_custom_fields:
+                                c_val = current_data.get(field, 'Empty')
+                                p_val = pending_data.get(field, 'Empty')
+                                if c_val != p_val:
+                                    st.markdown(f"- **{field}**: `{c_val}` -> `{p_val}`")
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("Approve Changes", key=f"appr_{emp['id']}", type="primary"):
+                                    try:
+                                        supabase.table("team_members").update({
+                                            "profile_data": pending_data,
+                                            "pending_profile_data": None
+                                        }).eq("id", emp['id']).execute()
+                                        st.success("Changes approved.")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                            with c2:
+                                if st.button("Reject", key=f"rej_{emp['id']}"):
+                                    try:
+                                        supabase.table("team_members").update({
+                                            "pending_profile_data": None
+                                        }).eq("id", emp['id']).execute()
+                                        st.success("Request rejected.")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
+                    st.divider()
+
                 st.subheader("Executive Headcount Dashboard")
                 df_team = pd.DataFrame(team_data)
                 
@@ -1050,6 +1125,7 @@ elif page == "Admin Settings":
                 
                 roster_display_cols = {
                     'full_name': 'Name',
+                    'code_name': 'Code',
                     'role': 'Designation',
                     'status': 'Status',
                     'email': 'Email',
@@ -1067,18 +1143,41 @@ elif page == "Admin Settings":
                 with col_onboard:
                     with st.form("onboard_form", clear_on_submit=True):
                         st.write("Onboard New Employee")
-                        new_name = st.text_input("Full Name")
+                        new_first = st.text_input("First Name")
+                        new_father = st.text_input("Father's Name")
+                        new_last = st.text_input("Last Name")
+                        
                         new_email = st.text_input("Email")
                         new_phone = st.text_input("Phone")
                         new_join = st.date_input("Join Date")
                         new_role = st.selectbox("Designation", options=global_designations)
                         
                         if st.form_submit_button("Onboard Employee", type="primary"):
-                            if not new_name.strip():
-                                st.error("Name is required.")
+                            if not new_first.strip() or not new_last.strip():
+                                st.error("First and Last name are required.")
                             else:
+                                # Algorithmic Code Name Generation
+                                f_initial = new_first.strip()[0].upper()
+                                m_initial = new_father.strip()[0].upper() if new_father.strip() else ""
+                                l_initial = new_last.strip()[0].upper()
+                                base_code = f"{f_initial}{m_initial}{l_initial}"
+                                
+                                # Collision Check
+                                existing_codes = [m.get('code_name') for m in team_data if m.get('code_name')]
+                                final_code = base_code
+                                counter = 1
+                                while final_code in existing_codes:
+                                    final_code = f"{base_code}-{counter}"
+                                    counter += 1
+                                    
+                                combined_name = f"{new_first.strip()} {new_last.strip()}"
+                                
                                 payload = {
-                                    "full_name": new_name.strip(),
+                                    "first_name": new_first.strip(),
+                                    "father_name": new_father.strip(),
+                                    "last_name": new_last.strip(),
+                                    "full_name": combined_name,
+                                    "code_name": final_code,
                                     "email": new_email.strip(),
                                     "phone": new_phone.strip(),
                                     "join_date": new_join.isoformat(),
@@ -1088,8 +1187,8 @@ elif page == "Admin Settings":
                                 }
                                 try:
                                     supabase.table("team_members").insert(payload).execute()
-                                    st.success("Employee onboarded.")
-                                    time.sleep(0.5)
+                                    st.success(f"Employee {combined_name} onboarded with code {final_code}.")
+                                    time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error: {e}")
@@ -1128,7 +1227,7 @@ elif page == "Admin Settings":
                             if btn_update:
                                 try:
                                     supabase.table("team_members").update({"role": upd_role, "status": upd_status}).eq("id", emp_id).execute()
-                                    st.success("Employee updated.")
+                                    st.success("Employee core data updated.")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -1246,7 +1345,7 @@ elif page == "Admin Settings":
                 current_deliverables = taxonomy_map[selected_cat]
                 
                 with st.form("manage_deliverables_form"):
-                    active_delivs = st.multiselect("Current Deliverables (Click 'X' to remove)", options=current_deliverables, default=current_deliverables)
+                    active_delivs = st.multiselect("Current Deliverables", options=current_deliverables, default=current_deliverables)
                     new_deliv = st.text_input("Add New Deliverable")
                     
                     if st.form_submit_button("Save Deliverables", type="primary"):
