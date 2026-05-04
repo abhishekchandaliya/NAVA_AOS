@@ -21,6 +21,12 @@ if 'daily_log_cart' not in st.session_state:
 if 'grid_key' not in st.session_state: 
     st.session_state.grid_key = 0
 
+if 'roster_key' not in st.session_state:
+    st.session_state.roster_key = 0
+
+if 'admin_emp_id' not in st.session_state:
+    st.session_state.admin_emp_id = None
+
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
@@ -135,6 +141,7 @@ st.sidebar.divider()
 if st.sidebar.button("Log Out", use_container_width=True):
     st.session_state.current_user = None
     st.session_state.selected_project_code = None
+    st.session_state.admin_emp_id = None
     st.rerun()
 
 # ==========================================
@@ -1011,7 +1018,10 @@ elif page == "Admin Settings":
         with adm_tab2:
             if st.session_state.admin_emp_id:
                 # STATE 2: EMPLOYEE HUB DRILL-DOWN WITH TOTAL EDIT CONTROL
-                st.button("Back to Roster", on_click=go_to_roster)
+                if st.button("Back to Roster"):
+                    st.session_state.admin_emp_id = None
+                    st.session_state.roster_key += 1
+                    st.rerun()
                 
                 emp_target_id = st.session_state.admin_emp_id
                 emp_record = next((e for e in team_data if e['id'] == emp_target_id), None)
@@ -1124,7 +1134,8 @@ elif page == "Admin Settings":
                             try:
                                 supabase.table("team_members").update(payload).eq("id", emp_target_id).execute()
                                 st.success("Employee record completely updated.")
-                                st.session_state['roster_grid'] = {'selection': {'rows': [], 'columns': []}}
+                                st.session_state.admin_emp_id = None
+                                st.session_state.roster_key += 1
                                 time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
@@ -1134,7 +1145,8 @@ elif page == "Admin Settings":
                             try:
                                 supabase.table("team_members").delete().eq("id", emp_target_id).execute()
                                 st.success("Employee record deleted.")
-                                st.session_state['roster_grid'] = {'selection': {'rows': [], 'columns': []}}
+                                st.session_state.admin_emp_id = None
+                                st.session_state.roster_key += 1
                                 time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
@@ -1158,7 +1170,7 @@ elif page == "Admin Settings":
                             for field in global_custom_fields:
                                 c_val = current_data.get(field, 'Empty')
                                 p_val = pending_data.get(field, 'Empty')
-                                if c_val != p_val:
+                                if str(c_val) != str(p_val):
                                     st.markdown(f"- **{field}**: `{c_val}` -> `{p_val}`")
                             
                             c1, c2 = st.columns(2)
@@ -1233,17 +1245,19 @@ elif page == "Admin Settings":
                 
                 df_roster_ui = df_roster[list(roster_display_cols.keys())].rename(columns=roster_display_cols)
                 
+                current_roster_key = f"roster_grid_{st.session_state.roster_key}"
+                
                 st.dataframe(
                     df_roster_ui.drop(columns=['ID']), 
                     use_container_width=True, 
                     hide_index=True,
                     selection_mode="single-row",
                     on_select="rerun",
-                    key="roster_grid"
+                    key=current_roster_key
                 )
                 
-                if 'roster_grid' in st.session_state and len(st.session_state.roster_grid['selection']['rows']) > 0:
-                    selected_idx = st.session_state.roster_grid['selection']['rows'][0]
+                if current_roster_key in st.session_state and len(st.session_state[current_roster_key]['selection']['rows']) > 0:
+                    selected_idx = st.session_state[current_roster_key]['selection']['rows'][0]
                     st.session_state.admin_emp_id = df_roster_ui.iloc[selected_idx]['ID']
                     st.rerun()
                 
