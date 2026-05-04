@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import altair as alt
 import time
+import math
 
 # --- Page Configuration ---
 st.set_page_config(page_title="AOS | Architect's Operating System", layout="wide")
@@ -57,6 +58,59 @@ def generate_code_name(first, father, last, existing_codes):
         counter += 1
         
     return final_code
+
+# --- Pre-Save Sanitization & Calculation Engine ---
+def sanitize_and_calculate_profile(raw_profile_data):
+    processed = raw_profile_data.copy()
+
+    # Handle Past Employment
+    if 'Past Employment' in processed:
+        pe_records = processed['Past Employment']
+        if isinstance(pe_records, list):
+            df_pe = pd.DataFrame(pe_records)
+            if not df_pe.empty and 'Company Name' in df_pe.columns:
+                df_pe['Company Name'] = df_pe['Company Name'].fillna('').astype(str).str.strip()
+                df_pe = df_pe[df_pe['Company Name'] != '']
+
+                if not df_pe.empty:
+                    df_pe['From Date'] = pd.to_datetime(df_pe['From Date'], errors='coerce')
+                    df_pe['To Date'] = pd.to_datetime(df_pe['To Date'], errors='coerce')
+
+                    total_days = 0
+                    for _, row in df_pe.iterrows():
+                        if pd.notna(row['From Date']) and pd.notna(row['To Date']):
+                            diff = (row['To Date'] - row['From Date']).days
+                            if diff > 0:
+                                total_days += diff
+
+                    processed['Total Experience'] = str(round(total_days / 365.0, 1))
+
+                    df_pe = df_pe.sort_values(by='To Date', ascending=False)
+                    df_pe['From Date'] = df_pe['From Date'].dt.strftime('%Y-%m-%d').fillna("")
+                    df_pe['To Date'] = df_pe['To Date'].dt.strftime('%Y-%m-%d').fillna("")
+                    processed['Past Employment'] = df_pe.fillna("").to_dict('records')
+                else:
+                    processed['Past Employment'] = []
+                    processed['Total Experience'] = "0.0"
+
+    # Handle Educational Background
+    if 'Educational Background' in processed:
+        ed_records = processed['Educational Background']
+        if isinstance(ed_records, list):
+            df_ed = pd.DataFrame(ed_records)
+            if not df_ed.empty and 'Degree' in df_ed.columns:
+                df_ed['Degree'] = df_ed['Degree'].fillna('').astype(str).str.strip()
+                df_ed = df_ed[df_ed['Degree'] != '']
+
+                if not df_ed.empty:
+                    df_ed['Passing Year'] = pd.to_numeric(df_ed['Passing Year'], errors='coerce')
+                    df_ed = df_ed.sort_values(by='Passing Year', ascending=False)
+                    df_ed['Passing Year'] = df_ed['Passing Year'].astype('Int64').astype(str).replace('<NA>', '')
+                    processed['Educational Background'] = df_ed.fillna("").to_dict('records')
+                else:
+                    processed['Educational Background'] = []
+
+    return processed
 
 # --- Database Connection ---
 @st.cache_resource
@@ -583,7 +637,7 @@ elif page == "Team Board":
                                     if st.button("Acknowledge and Clear", key=f"ack_fb_{fb['id']}"):
                                         try:
                                             supabase.table("project_ledger").update({"escalation_status": "Resolved"}).eq("id", fb['id']).execute()
-                                            st.toast("Feedback Acknowledged")
+                                            st.success("Feedback Acknowledged")
                                             time.sleep(0.5)
                                             st.rerun()
                                         except Exception as e:
@@ -661,7 +715,7 @@ elif page == "Team Board":
                                         }
                                         supabase.table("project_ledger").insert(new_entry).execute()
                                     
-                                    st.toast("Project Updated and Logged Successfully")
+                                    st.success("Project Updated and Logged Successfully")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -896,6 +950,9 @@ elif page == "Team Board":
                     with st.form("my_profile_form"):
                         new_prof_data = {}
                         for field in global_custom_fields:
+                            if field == 'Total Experience':
+                                continue 
+                                
                             if field == 'Emergency Contact':
                                 st.write(f"**{field}**")
                                 ec_data = prof_data.get(field, {})
@@ -911,16 +968,38 @@ elif page == "Team Board":
                                 ed_data = prof_data.get(field, [])
                                 if not isinstance(ed_data, list): ed_data = []
                                 df_ed = pd.DataFrame(ed_data, columns=['Degree', 'College/University', 'Passing Year'])
-                                edited_ed = st.data_editor(df_ed, num_rows="dynamic", key=f"my_ed_{selected_member_id}", use_container_width=True)
-                                new_prof_data[field] = edited_ed.fillna("").to_dict('records')
+                                df_ed['Passing Year'] = pd.to_numeric(df_ed['Passing Year'], errors='coerce')
+                                
+                                edited_ed = st.data_editor(
+                                    df_ed, 
+                                    num_rows="dynamic", 
+                                    column_config={"Passing Year": st.column_config.NumberColumn(format="%d")},
+                                    key=f"my_ed_{selected_member_id}", 
+                                    use_container_width=True
+                                )
+                                new_prof_data[field] = edited_ed.to_dict('records')
                                 
                             elif field == 'Past Employment':
                                 st.write(f"**{field}**")
                                 pe_data = prof_data.get(field, [])
                                 if not isinstance(pe_data, list): pe_data = []
-                                df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From (MM/YYYY)', 'To (MM/YYYY)', 'Total Years'])
-                                edited_pe = st.data_editor(df_pe, num_rows="dynamic", key=f"my_pe_{selected_member_id}", use_container_width=True)
-                                new_prof_data[field] = edited_pe.fillna("").to_dict('records')
+                                df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From Date', 'To Date'])
+                                df_pe['From Date'] = pd.to_datetime(df_pe['From Date'], errors='coerce').dt.date
+                                df_pe['To Date'] = pd.to_datetime(df_pe['To Date'], errors='coerce').dt.date
+                                
+                                edited_pe = st.data_editor(
+                                    df_pe, 
+                                    num_rows="dynamic", 
+                                    column_config={
+                                        "Company Name": st.column_config.TextColumn(),
+                                        "City": st.column_config.TextColumn(),
+                                        "From Date": st.column_config.DateColumn(),
+                                        "To Date": st.column_config.DateColumn()
+                                    },
+                                    key=f"my_pe_{selected_member_id}", 
+                                    use_container_width=True
+                                )
+                                new_prof_data[field] = edited_pe.to_dict('records')
                                 
                             else:
                                 current_val = prof_data.get(field, "")
@@ -928,8 +1007,10 @@ elif page == "Team Board":
                                 new_prof_data[field] = (temp_val or "").strip()
                             
                         if st.form_submit_button("Submit Update Request", type="primary"):
+                            final_prof_data = sanitize_and_calculate_profile(new_prof_data)
+                            
                             try:
-                                supabase.table("team_members").update({"pending_profile_data": new_prof_data}).eq("id", selected_member_id).execute()
+                                supabase.table("team_members").update({"pending_profile_data": final_prof_data}).eq("id", selected_member_id).execute()
                                 st.success("Profile update submitted. Pending Admin approval.")
                                 time.sleep(1)
                                 st.rerun()
@@ -1082,6 +1163,9 @@ elif page == "Admin Settings":
                         new_prof_data = {}
                         if global_custom_fields:
                             for field in global_custom_fields:
+                                if field == 'Total Experience':
+                                    continue
+                                    
                                 if field == 'Emergency Contact':
                                     st.write(f"**{field}**")
                                     ec_data = prof_data.get(field, {})
@@ -1097,16 +1181,38 @@ elif page == "Admin Settings":
                                     ed_data = prof_data.get(field, [])
                                     if not isinstance(ed_data, list): ed_data = []
                                     df_ed = pd.DataFrame(ed_data, columns=['Degree', 'College/University', 'Passing Year'])
-                                    edited_ed = st.data_editor(df_ed, num_rows="dynamic", key=f"adm_ed_{emp_target_id}", use_container_width=True)
-                                    new_prof_data[field] = edited_ed.fillna("").to_dict('records')
+                                    df_ed['Passing Year'] = pd.to_numeric(df_ed['Passing Year'], errors='coerce')
+                                    
+                                    edited_ed = st.data_editor(
+                                        df_ed, 
+                                        num_rows="dynamic", 
+                                        column_config={"Passing Year": st.column_config.NumberColumn(format="%d")},
+                                        key=f"adm_ed_{emp_target_id}", 
+                                        use_container_width=True
+                                    )
+                                    new_prof_data[field] = edited_ed.to_dict('records')
                                     
                                 elif field == 'Past Employment':
                                     st.write(f"**{field}**")
                                     pe_data = prof_data.get(field, [])
                                     if not isinstance(pe_data, list): pe_data = []
-                                    df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From (MM/YYYY)', 'To (MM/YYYY)', 'Total Years'])
-                                    edited_pe = st.data_editor(df_pe, num_rows="dynamic", key=f"adm_pe_{emp_target_id}", use_container_width=True)
-                                    new_prof_data[field] = edited_pe.fillna("").to_dict('records')
+                                    df_pe = pd.DataFrame(pe_data, columns=['Company Name', 'City', 'From Date', 'To Date'])
+                                    df_pe['From Date'] = pd.to_datetime(df_pe['From Date'], errors='coerce').dt.date
+                                    df_pe['To Date'] = pd.to_datetime(df_pe['To Date'], errors='coerce').dt.date
+                                    
+                                    edited_pe = st.data_editor(
+                                        df_pe, 
+                                        num_rows="dynamic", 
+                                        column_config={
+                                            "Company Name": st.column_config.TextColumn(),
+                                            "City": st.column_config.TextColumn(),
+                                            "From Date": st.column_config.DateColumn(),
+                                            "To Date": st.column_config.DateColumn()
+                                        },
+                                        key=f"adm_pe_{emp_target_id}", 
+                                        use_container_width=True
+                                    )
+                                    new_prof_data[field] = edited_pe.to_dict('records')
                                     
                                 else:
                                     current_val = prof_data.get(field, "")
@@ -1123,9 +1229,11 @@ elif page == "Admin Settings":
                             submit_del = st.form_submit_button("Delete Employee Record", use_container_width=True)
                             
                         if submit_hub:
+                            final_prof_data = sanitize_and_calculate_profile(new_prof_data)
+                            
                             upd_full_name = f"{(upd_first or '').strip()} {(upd_last or '').strip()}".strip()
                             existing_codes = [m.get('code_name') for m in team_data if m.get('code_name') and m.get('id') != emp_target_id]
-                            upd_code = generate_code_name(upd_first, upd_father, upd_last, existing_codes)
+                            upd_code = generate_code_name((upd_first or "").strip(), (upd_father or "").strip(), (upd_last or "").strip(), existing_codes)
                             
                             payload = {
                                 "first_name": (upd_first or "").strip(),
@@ -1138,7 +1246,7 @@ elif page == "Admin Settings":
                                 "join_date": upd_join.isoformat(),
                                 "role": upd_role,
                                 "status": upd_status,
-                                "profile_data": new_prof_data
+                                "profile_data": final_prof_data
                             }
                             try:
                                 supabase.table("team_members").update(payload).eq("id", emp_target_id).execute()
