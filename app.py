@@ -34,6 +34,12 @@ if 'admin_emp_id' not in st.session_state:
 if 'admin_edit_proj_code' not in st.session_state:
     st.session_state.admin_edit_proj_code = None
 
+if 'watchlist_key' not in st.session_state:
+    st.session_state.watchlist_key = 0
+    
+if 'master_dir_key' not in st.session_state:
+    st.session_state.master_dir_key = 0
+
 def go_to_dashboard():
     st.session_state.selected_project_code = None
 
@@ -220,11 +226,8 @@ if st.sidebar.button("Log Out", use_container_width=True):
 # ==========================================
 if st.session_state.selected_project_code:
     if st.button("Close Project Hub", use_container_width=False):
-        # Clear dictionary state to prevent automatic reopening
-        if 'watchlist_grid' in st.session_state:
-            st.session_state['watchlist_grid'] = {'selection': {'rows': [], 'columns': []}}
-        if 'master_directory_grid' in st.session_state:
-            st.session_state['master_directory_grid'] = {'selection': {'rows': [], 'columns': []}}
+        st.session_state.watchlist_key += 1
+        st.session_state.master_dir_key += 1
         go_to_dashboard()
         st.rerun()
         
@@ -430,20 +433,21 @@ else:
                         "tracking_status": st.column_config.TextColumn("Tracking Status", width="medium")
                     }
                     
+                    current_watch_key = f"watchlist_grid_{st.session_state.watchlist_key}"
                     st.dataframe(
                         action_display_df, 
                         use_container_width=True, 
                         hide_index=True,
                         selection_mode="single-row",
                         on_select="rerun",
-                        key="watchlist_grid",
+                        key=current_watch_key,
                         column_config=col_cfg
                     )
                     
-                    if 'watchlist_grid' in st.session_state and len(st.session_state.watchlist_grid['selection']['rows']) > 0:
-                        sel_idx = st.session_state.watchlist_grid['selection']['rows'][0]
+                    if current_watch_key in st.session_state and len(st.session_state[current_watch_key]['selection']['rows']) > 0:
+                        sel_idx = st.session_state[current_watch_key]['selection']['rows'][0]
                         st.session_state.selected_project_code = action_display_df.iloc[sel_idx]['project_code']
-                        st.session_state['watchlist_grid'] = {'selection': {'rows': [], 'columns': []}}
+                        st.session_state.watchlist_key += 1
                         st.rerun()
                 else:
                     st.write("All projects are currently on track.")
@@ -530,20 +534,21 @@ else:
                     "project_name": st.column_config.TextColumn("Project Name", width="large")
                 }
                 
+                current_master_key = f"master_dir_grid_{st.session_state.master_dir_key}"
                 st.dataframe(
                     master_display_df,
                     use_container_width=True, 
                     hide_index=True,
                     selection_mode="single-row",
                     on_select="rerun",
-                    key="master_directory_grid",
+                    key=current_master_key,
                     column_config=col_cfg_master
                 )
                 
-                if 'master_directory_grid' in st.session_state and len(st.session_state.master_directory_grid['selection']['rows']) > 0:
-                    sel_idx = st.session_state.master_directory_grid['selection']['rows'][0]
+                if current_master_key in st.session_state and len(st.session_state[current_master_key]['selection']['rows']) > 0:
+                    sel_idx = st.session_state[current_master_key]['selection']['rows'][0]
                     st.session_state.selected_project_code = master_display_df.iloc[sel_idx]['project_code']
-                    st.session_state['master_directory_grid'] = {'selection': {'rows': [], 'columns': []}}
+                    st.session_state.master_dir_key += 1
                     st.rerun()
 
         else:
@@ -649,27 +654,118 @@ else:
                     st.subheader("Assigned Workload")
                     df_my_tasks = pd.DataFrame(my_tasks)
                     
-                    df_my_tasks["assigned_to"] = df_my_tasks["assigned_to"].map(lambda x: id_to_name_map.get(x, "Unknown"))
                     df_my_tasks["project_name"] = df_my_tasks["project_code"].map(lambda x: project_map.get(x, "Unknown"))
                     
-                    display_columns = ["project_code", "project_name", "assigned_to", "task_description", "deadline", "status"]
+                    today_date = datetime.today().date()
+                    def process_task_status(row):
+                        stat = row['status']
+                        if stat != 'Completed':
+                            try:
+                                dl_date = pd.to_datetime(row['deadline']).date()
+                                if dl_date < today_date:
+                                    return "OVERDUE"
+                            except:
+                                pass
+                        return stat
+                        
+                    df_my_tasks['status'] = df_my_tasks.apply(process_task_status, axis=1)
+                    
+                    display_columns = ["project_code", "project_name", "task_description", "deadline", "status"]
                     existing_columns = [col for col in display_columns if col in df_my_tasks.columns]
-                    st.dataframe(df_my_tasks[existing_columns], use_container_width=True, hide_index=True)
                     
-                    st.divider()
-                    st.subheader("Update Task Status")
-                    task_options = {f"{t['project_code']} - {t['task_description'][:40]}...": t['id'] for t in my_tasks}
-                    selected_task_display = st.selectbox("Select Task to Update", options=list(task_options.keys()))
-                    new_status = st.selectbox("Update Status To", options=["Pending", "In Review", "Completed"])
+                    df_display = df_my_tasks[existing_columns].reset_index(drop=True)
+                    current_task_key = f"task_grid_{st.session_state.task_grid_key}"
                     
-                    if st.button("Update Status", type="primary"):
-                        task_id_to_update = task_options[selected_task_display]
-                        try:
-                            supabase.table("tasks").update({"status": new_status}).eq("id", task_id_to_update).execute()
-                            st.success("Task status updated.")
-                            st.rerun() 
-                        except Exception as e:
-                            st.error(f"Failed to update task: {e}")
+                    st.dataframe(
+                        df_display, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        selection_mode="single-row",
+                        on_select="rerun",
+                        key=current_task_key
+                    )
+                    
+                    if current_task_key in st.session_state and len(st.session_state[current_task_key]['selection']['rows']) > 0:
+                        selected_idx = st.session_state[current_task_key]['selection']['rows'][0]
+                        selected_task_data = df_display.iloc[selected_idx]
+                        
+                        original_task = next((t for t in my_tasks if t['task_description'] == selected_task_data['task_description'] and t['project_code'] == selected_task_data['project_code']), None)
+                        
+                        if original_task:
+                            st.divider()
+                            st.subheader(f"Task Hub: {original_task['task_description']}")
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.markdown(f"**Project:** {selected_task_data['project_name']} ({original_task['project_code']})")
+                                st.markdown(f"**Strict Deadline:** {original_task['deadline']}")
+                                st.markdown(f"**Current Status:** {original_task['status']}")
+                                
+                                with st.form(f"update_task_{original_task['id']}"):
+                                    status_options = ["Pending", "In Progress", "In Review", "Completed"]
+                                    current_stat = original_task['status']
+                                    new_status = st.selectbox("Update Status", options=status_options, index=status_options.index(current_stat) if current_stat in status_options else 0)
+                                    
+                                    if st.form_submit_button("Save Status", type="primary"):
+                                        payload = {"status": new_status}
+                                        if new_status == "Completed":
+                                            payload["completed_at"] = datetime.now().isoformat()
+                                        
+                                        try:
+                                            supabase.table("tasks").update(payload).eq("id", original_task['id']).execute()
+                                            st.success("Task status updated.")
+                                            st.session_state.task_grid_key += 1
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Failed to update task: {e}")
+                                            
+                                if not original_task.get('extension_requested'):
+                                    if st.button("Request Deadline Extension", use_container_width=True):
+                                        try:
+                                            supabase.table("tasks").update({"extension_requested": True}).eq("id", original_task['id']).execute()
+                                            st.success("Extension requested successfully.")
+                                            st.session_state.task_grid_key += 1
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Failed to request extension: {e}")
+                                else:
+                                    st.info("Deadline extension already requested.")
+                                    
+                            with c2:
+                                st.write("Task Communication")
+                                try:
+                                    comms_res = supabase.table("task_communications").select("*").eq("task_id", original_task['id']).order("created_at").execute()
+                                    comms_data = comms_res.data
+                                except Exception:
+                                    comms_data = []
+                                    
+                                if comms_data:
+                                    for c in comms_data:
+                                        author_name = id_to_name_map.get(c['author_id'], 'Unknown')
+                                        msg_date = pd.to_datetime(c['created_at']).strftime('%b %d, %H:%M')
+                                        st.markdown(f"**{author_name}** ({msg_date}): {c.get('message', '')}")
+                                else:
+                                    st.write("No communications for this task yet.")
+                                    
+                                with st.form(f"comm_form_{original_task['id']}", clear_on_submit=True):
+                                    new_msg = st.text_input("New Message")
+                                    if st.form_submit_button("Send Message", type="primary"):
+                                        if (new_msg or "").strip():
+                                            msg_payload = {
+                                                "task_id": original_task['id'],
+                                                "author_id": selected_member_id,
+                                                "message": (new_msg or "").strip()
+                                            }
+                                            try:
+                                                supabase.table("task_communications").insert(msg_payload).execute()
+                                                st.success("Message sent.")
+                                                st.session_state.task_grid_key += 1
+                                                time.sleep(0.5)
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Failed to send message: {e}")
                 else:
                     st.write("You currently have no active tasks assigned.")
                     
@@ -1492,6 +1588,7 @@ else:
                     if current_roster_key in st.session_state and len(st.session_state[current_roster_key]['selection']['rows']) > 0:
                         selected_idx = st.session_state[current_roster_key]['selection']['rows'][0]
                         st.session_state.admin_emp_id = df_roster_ui.iloc[selected_idx]['ID']
+                        st.session_state.roster_key += 1
                         st.rerun()
                     
                     st.divider()
@@ -1545,204 +1642,207 @@ else:
                     st.error(f"Error loading projects: {e}")
                     projects_data = []
 
-                st.subheader("Create New Project")
-                with st.form("create_project_form", clear_on_submit=True):
-                    st.write("Core Identity")
-                    c1, c2 = st.columns(2)
-                    p_code = c1.text_input("Project Code")
-                    p_name = c2.text_input("Project Name")
-                    
-                    c3, c4, c5 = st.columns(3)
-                    p_client = c3.text_input("Client Name")
-                    p_lead = c4.selectbox("Assign Team Lead", options=list(name_to_id_map.keys()))
-                    p_arch = c5.text_input("Architect")
-
-                    st.write("Typology & Scale")
-                    t1, t2, t3 = st.columns(3)
-                    
-                    if global_project_categories:
-                        p_cat = t1.selectbox("Category", options=global_project_categories)
-                    else:
-                        p_cat = t1.text_input("Category")
-                        
-                    if global_project_sub_categories:
-                        p_subcat = t2.selectbox("Sub-Category", options=global_project_sub_categories)
-                    else:
-                        p_subcat = t2.text_input("Sub-Category")
-                        
-                    p_scale = t3.text_input("Scale")
-                    p_scope = st.text_area("Scope")
-
-                    st.write("Geography")
-                    g1, g2 = st.columns(2)
-                    p_city = g1.text_input("City")
-                    p_map = g2.text_input("Map Location")
-                    p_address = st.text_area("Address")
-
-                    st.write("Timeline")
-                    d1, d2, d3 = st.columns(3)
-                    p_1st_date = d1.date_input("Project 1st Date", value=None, min_value=date(2000, 1, 1))
-                    p_start_date = d2.date_input("Start Date", value=None, min_value=date(2000, 1, 1))
-                    p_comp_date = d3.date_input("Target Completion Date", value=None, min_value=date(2000, 1, 1))
-                    
-                    if st.form_submit_button("Create Project", type="primary", use_container_width=True):
-                        if not (p_code or "").strip() or not (p_name or "").strip():
-                            st.error("Project Code and Name are required.")
-                        else:
-                            new_project_payload = {
-                                "project_code": (p_code or "").strip(),
-                                "project_name": (p_name or "").strip(),
-                                "client_name": (p_client or "").strip(),
-                                "team_lead": name_to_id_map.get(p_lead),
-                                "architect": (p_arch or "").strip(),
-                                "category": (p_cat or "").strip(),
-                                "sub_category": (p_subcat or "").strip(),
-                                "scale": (p_scale or "").strip(),
-                                "scope": (p_scope or "").strip(),
-                                "city": (p_city or "").strip(),
-                                "map_location": (p_map or "").strip(),
-                                "address": (p_address or "").strip(),
-                                "project_1st_date": p_1st_date.isoformat() if p_1st_date else None,
-                                "start_date": p_start_date.isoformat() if p_start_date else None,
-                                "completion_date": p_comp_date.isoformat() if p_comp_date else None,
-                                "status": "Active",
-                                "current_stage": "Proposal",
-                                "tracking_status": "On Track"
-                            }
-                            try:
-                                supabase.table("projects").insert(new_project_payload).execute()
-                                st.success(f"Project {(p_code or '').strip()} created successfully.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to create project: {e}")
-
-                st.divider()
-                st.subheader("Manage Existing Projects")
-                if projects_data:
-                    proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data}
-                    
-                    proj_options_list = list(proj_update_options.keys())
-                    default_index = 0
-                    if st.session_state.admin_edit_proj_code:
-                        for i, opt in enumerate(proj_options_list):
-                            if proj_update_options[opt] == st.session_state.admin_edit_proj_code:
-                                default_index = i
-                                break
-                    
-                    sel_col1, sel_col2 = st.columns([3, 1])
-                    with sel_col1:
-                        selected_proj_to_update = st.selectbox("Select Active Project", options=proj_options_list, index=default_index, key="admin_manage_proj_selector", label_visibility="collapsed")
-                    
-                    actual_proj_code = proj_update_options[selected_proj_to_update]
-                    st.session_state.admin_edit_proj_code = actual_proj_code
-                    
-                    with sel_col2:
-                        if st.button("View Hub", use_container_width=True):
-                            st.session_state.selected_project_code = actual_proj_code
-                            st.rerun()
-                    
-                    selected_project_data = next((p for p in projects_data if p['project_code'] == actual_proj_code), {})
-                    
-                    current_lead_id = selected_project_data.get('team_lead')
-                    current_lead_name = id_to_name_map.get(current_lead_id, list(name_to_id_map.keys())[0]) if current_lead_id else list(name_to_id_map.keys())[0]
-                    current_stage_val = selected_project_data.get('current_stage')
-                    current_status_val = selected_project_data.get('status', 'Active')
-                    
-                    stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
-                    main_status_options = ["Active", "On Hold", "Completed"]
-                    
-                    lead_idx = list(name_to_id_map.keys()).index(current_lead_name) if current_lead_name in name_to_id_map else 0
-                    stage_idx = stage_options.index(current_stage_val) if current_stage_val in stage_options else 0
-                    main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
-                    
-                    with st.form(f"admin_manage_project_form_{actual_proj_code}"):
+                mpc_col1, mpc_col2 = st.columns([1, 1.5])
+                
+                with mpc_col1:
+                    st.subheader("Create New Project")
+                    with st.form("create_project_form", clear_on_submit=True):
                         st.write("Core Identity")
-                        u_c1, u_c2 = st.columns(2)
-                        u_code = u_c1.text_input("Project Code", value=selected_project_data.get('project_code', ''), disabled=True, key=f"edit_code_{actual_proj_code}")
-                        u_name = u_c2.text_input("Project Name", value=selected_project_data.get('project_name', ''), key=f"edit_name_{actual_proj_code}")
+                        c1, c2 = st.columns(2)
+                        p_code = c1.text_input("Project Code")
+                        p_name = c2.text_input("Project Name")
                         
-                        u_c3, u_c4, u_c5 = st.columns(3)
-                        u_client = u_c3.text_input("Client Name", value=selected_project_data.get('client_name', ''), key=f"edit_client_{actual_proj_code}")
-                        u_lead = u_c4.selectbox("Reassign Team Lead", options=list(name_to_id_map.keys()), index=lead_idx, key=f"edit_lead_{actual_proj_code}")
-                        u_arch = u_c5.text_input("Architect", value=selected_project_data.get('architect', ''), key=f"edit_arch_{actual_proj_code}")
+                        c3, c4, c5 = st.columns(3)
+                        p_client = c3.text_input("Client Name")
+                        p_lead = c4.selectbox("Assign Team Lead", options=list(name_to_id_map.keys()))
+                        p_arch = c5.text_input("Architect")
 
                         st.write("Typology & Scale")
-                        u_t1, u_t2, u_t3 = st.columns(3)
+                        t1, t2, t3 = st.columns(3)
                         
-                        c_cat = selected_project_data.get('category', '')
-                        cat_opts = list(global_project_categories)
-                        if c_cat and c_cat not in cat_opts: cat_opts.append(c_cat)
-                        
-                        c_subcat = selected_project_data.get('sub_category', '')
-                        subcat_opts = list(global_project_sub_categories)
-                        if c_subcat and c_subcat not in subcat_opts: subcat_opts.append(c_subcat)
-                        
-                        if cat_opts:
-                            u_cat = u_t1.selectbox("Category", options=cat_opts, index=cat_opts.index(c_cat) if c_cat in cat_opts else 0, key=f"edit_cat_{actual_proj_code}")
+                        if global_project_categories:
+                            p_cat = t1.selectbox("Category", options=global_project_categories)
                         else:
-                            u_cat = u_t1.text_input("Category", value=c_cat, key=f"edit_cat_txt_{actual_proj_code}")
+                            p_cat = t1.text_input("Category")
                             
-                        if subcat_opts:
-                            u_subcat = u_t2.selectbox("Sub-Category", options=subcat_opts, index=subcat_opts.index(c_subcat) if c_subcat in subcat_opts else 0, key=f"edit_subcat_{actual_proj_code}")
+                        if global_project_sub_categories:
+                            p_subcat = t2.selectbox("Sub-Category", options=global_project_sub_categories)
                         else:
-                            u_subcat = u_t2.text_input("Sub-Category", value=c_subcat, key=f"edit_subcat_txt_{actual_proj_code}")
+                            p_subcat = t2.text_input("Sub-Category")
                             
-                        u_scale = u_t3.text_input("Scale", value=selected_project_data.get('scale', ''), key=f"edit_scale_{actual_proj_code}")
-                        u_scope = st.text_area("Scope", value=selected_project_data.get('scope', ''), key=f"edit_scope_{actual_proj_code}")
+                        p_scale = t3.text_input("Scale")
+                        p_scope = st.text_area("Scope")
 
                         st.write("Geography")
-                        u_g1, u_g2 = st.columns(2)
-                        u_city = u_g1.text_input("City", value=selected_project_data.get('city', ''), key=f"edit_city_{actual_proj_code}")
-                        u_map = u_g2.text_input("Map Location", value=selected_project_data.get('map_location', ''), key=f"edit_map_{actual_proj_code}")
-                        u_address = st.text_area("Address", value=selected_project_data.get('address', ''), key=f"edit_address_{actual_proj_code}")
+                        g1, g2 = st.columns(2)
+                        p_city = g1.text_input("City")
+                        p_map = g2.text_input("Map Location")
+                        p_address = st.text_area("Address")
 
-                        st.write("Timeline & Status")
-                        u_d1, u_d2, u_d3 = st.columns(3)
+                        st.write("Timeline")
+                        d1, d2, d3 = st.columns(3)
+                        p_1st_date = d1.date_input("Project 1st Date", value=None, min_value=date(2000, 1, 1))
+                        p_start_date = d2.date_input("Start Date", value=None, min_value=date(2000, 1, 1))
+                        p_comp_date = d3.date_input("Target Completion Date", value=None, min_value=date(2000, 1, 1))
                         
-                        def parse_date_safe(date_str):
-                            if date_str:
-                                try: return datetime.strptime(date_str, "%Y-%m-%d").date()
-                                except: return None
-                            return None
-                            
-                        u_1st_date = u_d1.date_input("Project 1st Date", value=parse_date_safe(selected_project_data.get('project_1st_date')), min_value=date(2000, 1, 1), key=f"edit_1st_date_{actual_proj_code}")
-                        u_start_date = u_d2.date_input("Start Date", value=parse_date_safe(selected_project_data.get('start_date')), min_value=date(2000, 1, 1), key=f"edit_start_date_{actual_proj_code}")
-                        u_comp_date = u_d3.date_input("Target Completion Date", value=parse_date_safe(selected_project_data.get('completion_date')), min_value=date(2000, 1, 1), key=f"edit_comp_date_{actual_proj_code}")
+                        if st.form_submit_button("Create Project", type="primary", use_container_width=True):
+                            if not (p_code or "").strip() or not (p_name or "").strip():
+                                st.error("Project Code and Name are required.")
+                            else:
+                                new_project_payload = {
+                                    "project_code": (p_code or "").strip(),
+                                    "project_name": (p_name or "").strip(),
+                                    "client_name": (p_client or "").strip(),
+                                    "team_lead": name_to_id_map.get(p_lead),
+                                    "architect": (p_arch or "").strip(),
+                                    "category": (p_cat or "").strip(),
+                                    "sub_category": (p_subcat or "").strip(),
+                                    "scale": (p_scale or "").strip(),
+                                    "scope": (p_scope or "").strip(),
+                                    "city": (p_city or "").strip(),
+                                    "map_location": (p_map or "").strip(),
+                                    "address": (p_address or "").strip(),
+                                    "project_1st_date": p_1st_date.isoformat() if p_1st_date else None,
+                                    "start_date": p_start_date.isoformat() if p_start_date else None,
+                                    "completion_date": p_comp_date.isoformat() if p_comp_date else None,
+                                    "status": "Active",
+                                    "current_stage": "Proposal",
+                                    "tracking_status": "On Track"
+                                }
+                                try:
+                                    supabase.table("projects").insert(new_project_payload).execute()
+                                    st.success(f"Project {(p_code or '').strip()} created successfully.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to create project: {e}")
+
+                with mpc_col2:
+                    st.subheader("Manage Existing Projects")
+                    if projects_data:
+                        proj_update_options = {f"{p['project_code']} ({p.get('project_name', 'Unknown')})": p['project_code'] for p in projects_data}
                         
-                        u_s1, u_s2 = st.columns(2)
-                        u_stage = u_s1.selectbox("Current Stage", options=stage_options, index=stage_idx, key=f"edit_stage_{actual_proj_code}")
-                        u_status = u_s2.selectbox("Main Project Status", options=main_status_options, index=main_idx, key=f"edit_status_{actual_proj_code}")
+                        proj_options_list = list(proj_update_options.keys())
+                        default_index = 0
+                        if st.session_state.admin_edit_proj_code:
+                            for i, opt in enumerate(proj_options_list):
+                                if proj_update_options[opt] == st.session_state.admin_edit_proj_code:
+                                    default_index = i
+                                    break
                         
-                        if st.form_submit_button("Save Project Updates", type="primary", use_container_width=True):
-                            update_payload = {
-                                "project_name": (u_name or "").strip(),
-                                "client_name": (u_client or "").strip(),
-                                "team_lead": name_to_id_map.get(u_lead),
-                                "architect": (u_arch or "").strip(),
-                                "category": (u_cat or "").strip(),
-                                "sub_category": (u_subcat or "").strip(),
-                                "scale": (u_scale or "").strip(),
-                                "scope": (u_scope or "").strip(),
-                                "city": (u_city or "").strip(),
-                                "map_location": (u_map or "").strip(),
-                                "address": (u_address or "").strip(),
-                                "project_1st_date": u_1st_date.isoformat() if u_1st_date else None,
-                                "start_date": u_start_date.isoformat() if u_start_date else None,
-                                "completion_date": u_comp_date.isoformat() if u_comp_date else None,
-                                "current_stage": u_stage,
-                                "status": u_status
-                            }
-                            try:
-                                supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
-                                st.toast("Project details saved successfully.")
-                                st.success("Project details saved successfully.")
-                                time.sleep(1.5)
+                        sel_col1, sel_col2 = st.columns([3, 1])
+                        with sel_col1:
+                            selected_proj_to_update = st.selectbox("Select Active Project", options=proj_options_list, index=default_index, key="admin_manage_proj_selector", label_visibility="collapsed")
+                        
+                        actual_proj_code = proj_update_options[selected_proj_to_update]
+                        st.session_state.admin_edit_proj_code = actual_proj_code
+                        
+                        with sel_col2:
+                            if st.button("View Hub", use_container_width=True):
+                                st.session_state.selected_project_code = actual_proj_code
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to update project: {e}")
-                else:
-                    st.write("No projects available to manage.")
-                    
+                        
+                        selected_project_data = next((p for p in projects_data if p['project_code'] == actual_proj_code), {})
+                        
+                        current_lead_id = selected_project_data.get('team_lead')
+                        current_lead_name = id_to_name_map.get(current_lead_id, list(name_to_id_map.keys())[0]) if current_lead_id else list(name_to_id_map.keys())[0]
+                        current_stage_val = selected_project_data.get('current_stage')
+                        current_status_val = selected_project_data.get('status', 'Active')
+                        
+                        stage_options = ["Proposal", "Working", "Services", "Detailing", "Execution", "Plantation", "Design Revision", "Finishing"]
+                        main_status_options = ["Active", "On Hold", "Completed"]
+                        
+                        lead_idx = list(name_to_id_map.keys()).index(current_lead_name) if current_lead_name in name_to_id_map else 0
+                        stage_idx = stage_options.index(current_stage_val) if current_stage_val in stage_options else 0
+                        main_idx = main_status_options.index(current_status_val) if current_status_val in main_status_options else 0
+                        
+                        with st.form(f"admin_manage_project_form_{actual_proj_code}"):
+                            st.write("Core Identity")
+                            u_c1, u_c2 = st.columns(2)
+                            u_code = u_c1.text_input("Project Code", value=selected_project_data.get('project_code', ''), disabled=True, key=f"edit_code_{actual_proj_code}")
+                            u_name = u_c2.text_input("Project Name", value=selected_project_data.get('project_name', ''), key=f"edit_name_{actual_proj_code}")
+                            
+                            u_c3, u_c4, u_c5 = st.columns(3)
+                            u_client = u_c3.text_input("Client Name", value=selected_project_data.get('client_name', ''), key=f"edit_client_{actual_proj_code}")
+                            u_lead = u_c4.selectbox("Reassign Team Lead", options=list(name_to_id_map.keys()), index=lead_idx, key=f"edit_lead_{actual_proj_code}")
+                            u_arch = u_c5.text_input("Architect", value=selected_project_data.get('architect', ''), key=f"edit_arch_{actual_proj_code}")
+
+                            st.write("Typology & Scale")
+                            u_t1, u_t2, u_t3 = st.columns(3)
+                            
+                            c_cat = selected_project_data.get('category', '')
+                            cat_opts = list(global_project_categories)
+                            if c_cat and c_cat not in cat_opts: cat_opts.append(c_cat)
+                            
+                            c_subcat = selected_project_data.get('sub_category', '')
+                            subcat_opts = list(global_project_sub_categories)
+                            if c_subcat and c_subcat not in subcat_opts: subcat_opts.append(c_subcat)
+                            
+                            if cat_opts:
+                                u_cat = u_t1.selectbox("Category", options=cat_opts, index=cat_opts.index(c_cat) if c_cat in cat_opts else 0, key=f"edit_cat_{actual_proj_code}")
+                            else:
+                                u_cat = u_t1.text_input("Category", value=c_cat, key=f"edit_cat_txt_{actual_proj_code}")
+                                
+                            if subcat_opts:
+                                u_subcat = u_t2.selectbox("Sub-Category", options=subcat_opts, index=subcat_opts.index(c_subcat) if c_subcat in subcat_opts else 0, key=f"edit_subcat_{actual_proj_code}")
+                            else:
+                                u_subcat = u_t2.text_input("Sub-Category", value=c_subcat, key=f"edit_subcat_txt_{actual_proj_code}")
+                                
+                            u_scale = u_t3.text_input("Scale", value=selected_project_data.get('scale', ''), key=f"edit_scale_{actual_proj_code}")
+                            u_scope = st.text_area("Scope", value=selected_project_data.get('scope', ''), key=f"edit_scope_{actual_proj_code}")
+
+                            st.write("Geography")
+                            u_g1, u_g2 = st.columns(2)
+                            u_city = u_g1.text_input("City", value=selected_project_data.get('city', ''), key=f"edit_city_{actual_proj_code}")
+                            u_map = u_g2.text_input("Map Location", value=selected_project_data.get('map_location', ''), key=f"edit_map_{actual_proj_code}")
+                            u_address = st.text_area("Address", value=selected_project_data.get('address', ''), key=f"edit_address_{actual_proj_code}")
+
+                            st.write("Timeline & Status")
+                            u_d1, u_d2, u_d3 = st.columns(3)
+                            
+                            def parse_date_safe(date_str):
+                                if date_str:
+                                    try: return datetime.strptime(date_str, "%Y-%m-%d").date()
+                                    except: return None
+                                return None
+                                
+                            u_1st_date = u_d1.date_input("Project 1st Date", value=parse_date_safe(selected_project_data.get('project_1st_date')), min_value=date(2000, 1, 1), key=f"edit_1st_date_{actual_proj_code}")
+                            u_start_date = u_d2.date_input("Start Date", value=parse_date_safe(selected_project_data.get('start_date')), min_value=date(2000, 1, 1), key=f"edit_start_date_{actual_proj_code}")
+                            u_comp_date = u_d3.date_input("Target Completion Date", value=parse_date_safe(selected_project_data.get('completion_date')), min_value=date(2000, 1, 1), key=f"edit_comp_date_{actual_proj_code}")
+                            
+                            u_s1, u_s2 = st.columns(2)
+                            u_stage = u_s1.selectbox("Current Stage", options=stage_options, index=stage_idx, key=f"edit_stage_{actual_proj_code}")
+                            u_status = u_s2.selectbox("Main Project Status", options=main_status_options, index=main_idx, key=f"edit_status_{actual_proj_code}")
+                            
+                            if st.form_submit_button("Save Project Updates", type="primary", use_container_width=True):
+                                update_payload = {
+                                    "project_name": (u_name or "").strip(),
+                                    "client_name": (u_client or "").strip(),
+                                    "team_lead": name_to_id_map.get(u_lead),
+                                    "architect": (u_arch or "").strip(),
+                                    "category": (u_cat or "").strip(),
+                                    "sub_category": (u_subcat or "").strip(),
+                                    "scale": (u_scale or "").strip(),
+                                    "scope": (u_scope or "").strip(),
+                                    "city": (u_city or "").strip(),
+                                    "map_location": (u_map or "").strip(),
+                                    "address": (u_address or "").strip(),
+                                    "project_1st_date": u_1st_date.isoformat() if u_1st_date else None,
+                                    "start_date": u_start_date.isoformat() if u_start_date else None,
+                                    "completion_date": u_comp_date.isoformat() if u_comp_date else None,
+                                    "current_stage": u_stage,
+                                    "status": u_status
+                                }
+                                try:
+                                    supabase.table("projects").update(update_payload).eq("project_code", actual_proj_code).execute()
+                                    st.toast("Project details saved successfully.")
+                                    st.success("Project details saved successfully.")
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to update project: {e}")
+                    else:
+                        st.write("No projects available to manage.")
+                        
             # --- TAB 4: TASK SOPs ---
             with adm_tab4:
                 st.subheader("Manage Task Categories")
